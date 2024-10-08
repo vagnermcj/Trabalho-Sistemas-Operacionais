@@ -5,12 +5,15 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <string.h>
+#include <pthread.h>
 
 #define N_PROCESSOS 3
 #define MS 50000
 #define MAX 10
 
 int GLOBAL_IRQ = -1;
+static pthread_mutex_t lock;
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Estrutura da fila
 struct Queue {
@@ -87,15 +90,6 @@ int peek(struct Queue* q) {
     return q->items[q->primeiro];
 }
 
-void SignalHandler2(int sinal) {
-    switch (sinal) {
-
-        case SIGUSR2: 
-            printf("Teoria da Conspiração\n");
-            break;
-
-    }
-}
 
 void SignalHandler(int sinal) {
     switch (sinal) {
@@ -193,20 +187,20 @@ int main(void) {
     else //KernelSim 
     { 
        for (int i = 0; i < N_PROCESSOS; i++) {
-            int pid = fork();  // Criação do processo filho
-            if (pid == 0) 
-            {  // Filho
-                signal(SIGUSR2, SignalHandler2);  
+            // Criação do processo filho
+            if (fork() == 0) 
+            {  // Filho 
                 close(fd[0]);
                 close(pipepid[0]);
-                pid = getpid();  // Pega o PID do processo filho
+                int pid = getpid();  // Pega o PID do processo filho
                 printf("Filho criado com PID: %d\n", pid); 
                 //Mutex Lock
+                pthread_mutex_lock(&mutex);
                 if(write(pipepid[1], &pid, sizeof(int)) == -1){
-                    printf("DEu merda");
+                    printf("Deu ruim");
                 };  // Envia o PID para o pai
-                
                 //Mutex unlock
+                pthread_mutex_unlock(&mutex);
                 processo(fd, pipepid);  // Executa a função do processo
                 exit(0);  // Saída do processo filho
             }
@@ -227,8 +221,11 @@ int main(void) {
         for(int i =0; i<N_PROCESSOS;i++) //Filhos criados, agora coloca na fila
         {
             int pid_filho; 
+            printf("pid atual %d\n",pid_filho);
+            pthread_mutex_unlock(&mutex);
             read(pipepid[0], &pid_filho, sizeof(int));
             enqueue(&ready_processes, pid_filho);
+            pthread_mutex_unlock(&mutex);
         }
 
         kill(ready_processes.items[ready_processes.primeiro], SIGCONT);
