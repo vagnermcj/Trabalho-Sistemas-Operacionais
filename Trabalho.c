@@ -77,6 +77,7 @@ int main(void) {
             signal(SIGUSR1, SignalHandler);  
             signal(SIGUSR2, SignalHandler);  
             signal(SIGTERM, SignalHandler);  
+            signal(SIGTSTP, SignalHandler);
         }
         for (int i = 0; i < N_PROCESSOS; i++) {
             pidProcesses[i] = fork();
@@ -108,7 +109,7 @@ int main(void) {
             pthread_mutex_unlock(&mutex);
         }
 
-        kill(ready_processes.items[ready_processes.primeiro], SIGCONT); //Primeiro da fila ativo
+        kill(peek(&ready_processes), SIGCONT); //Primeiro da fila ativo
         kill(pidInterrupter, SIGCONT); //Interrupter Ativo
 
         while (1) {
@@ -151,7 +152,8 @@ int main(void) {
                 GLOBAL_IRQ = -1;
             }
 
-            if(GLOBAL_HAS_SYSCALL)
+
+            if(GLOBAL_HAS_SYSCALL == 1)
             {
                 char Dx = sc[0];
                 char Op = sc[1];
@@ -214,12 +216,14 @@ void processo(char* shm) {
     char Dx;
     char Op;
     int f;
+    raise(SIGSTOP);
     while (PC < MAX) {
+        printf("Processo executando: %d\n", getpid());
         d = rand() - 74;
         f  = (d % 100) + 1;
         sleep(1);
         if (f < 15) { 
-            printf("SYSCALL!!!!!\n");
+            printf("SYSCALL PROCESSO %d\n", getpid());
             if (d % 2) 
                 Dx = '1';
             else 
@@ -232,8 +236,8 @@ void processo(char* shm) {
             else 
                 Op = 'X';
             Syscall(Dx, Op, shm);   
+            kill(getppid(), SIGTSTP);
         }
-        kill(getpid(), SIGTRAP);
         sleep(1);
         PC++;
     }
