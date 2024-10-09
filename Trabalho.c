@@ -11,7 +11,7 @@
 #include <pthread.h>
 
 #define N_PROCESSOS 3
-#define MS 5
+#define SEGUNDOS 1
 #define MAX 10
 
 int GLOBAL_IRQ = -1;
@@ -170,7 +170,7 @@ int main(void) {
                     kill(next_process, SIGCONT); 
                 }
 
-                GLOBAL_HAS_SYSCALL = -1;
+                GLOBAL_HAS_SYSCALL = 0;
             }
 
             sleep(1); // Pausa no loop para evitar consumo excessivo de CPU
@@ -199,8 +199,8 @@ void SignalHandler(int sinal) {
             printf("Timeout\n");
             GLOBAL_IRQ = 0;
             break;
-        case SIGIOT:
-            printf("Syscall");
+        case SIGTSTP:
+            printf("Syscall\n");
             GLOBAL_HAS_SYSCALL = 1;
     }
 }
@@ -221,7 +221,7 @@ void processo(char* shm) {
         printf("Processo executando: %d\n", getpid());
         d = rand() - 74;
         f  = (d % 100) + 1;
-        sleep(1);
+        sleep(0.5);
         if (f < 15) { 
             printf("SYSCALL PROCESSO %d\n", getpid());
             if (d % 2) 
@@ -238,7 +238,7 @@ void processo(char* shm) {
             Syscall(Dx, Op, shm);   
             kill(getppid(), SIGTSTP);
         }
-        sleep(1);
+        sleep(0.5);
         PC++;
     }
 }
@@ -248,13 +248,13 @@ void InterruptController() {
     int parent_id = getppid();
 
     while (1) {
-        if (((double) rand() / RAND_MAX) <= 0.3) {
+        if (((double) rand() / RAND_MAX) <= 0.5) {
             kill(parent_id, SIGUSR1);
         }
-        if (((double) rand() / RAND_MAX) <= 0.6) {
+        if (((double) rand() / RAND_MAX) <= 0.8) {
             kill(parent_id, SIGUSR2);
         }
-        usleep(MS * 1000000);
+        usleep(SEGUNDOS * 1000000);
         kill(parent_id, SIGTERM);
     }
 }
