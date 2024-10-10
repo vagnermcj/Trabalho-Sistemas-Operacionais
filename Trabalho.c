@@ -47,6 +47,7 @@ int isEmpty( Queue* q);
 void enqueue( Queue* q, int value);
 int dequeue( Queue* q);
 int peek( Queue* q);
+int encontrarIndex(int vetor[], int tamanho, int valor);
 
 
 int main(void) {
@@ -122,7 +123,7 @@ int main(void) {
 
         while (1) {
 
-            if(GLOBAL_TERMINATED == 1)
+            if(GLOBAL_TERMINATED == 1 && GLOBAL_HAS_SYSCALL == -1)
             {
                 int terminated = dequeue(&exec_process);
                 enqueue(&terminated_process, terminated);
@@ -139,15 +140,31 @@ int main(void) {
                     case 1: 
                         if (!isEmpty(&blocked_D1)) {
                             int released_process = dequeue(&blocked_D1);
-                            printf("Processo %d liberado do dispositivo 1 e colocado na fila de prontos\n", released_process);
-                            enqueue(&ready_processes, released_process);
+                            int index = encontrarIndex(pidProcesses,N_PROCESSOS, released_process);
+                            printf("Processo %d com index %d liberado do dispositivo 1\n", released_process, index);
+                            if(pPCB[index].PC >= MAX) //Processo deve terminar
+                            {
+                                enqueue(&terminated_process, released_process);
+                                kill(released_process, SIGCONT);
+                            }
+                            else
+                                enqueue(&ready_processes, released_process);
+                            
+                            
                         }
                         break;
                     case 2: 
                         if (!isEmpty(&blocked_D2)) {
                             int released_process = dequeue(&blocked_D2);
-                            printf("Processo %d liberado do dispositivo 2 e colocado na fila de ativos\n", released_process);
-                            enqueue(&ready_processes, released_process);
+                            int index = encontrarIndex(pidProcesses,N_PROCESSOS, released_process);
+                            printf("Processo %d com index %d liberado do dispositivo 2\n", released_process, index);
+                            if(pPCB[index].PC >= MAX) //Processo deve terminar
+                            {
+                                enqueue(&terminated_process, released_process);
+                                kill(released_process, SIGCONT);
+                            }
+                            else
+                                enqueue(&ready_processes, released_process);
                         }
                         break;    
                 }
@@ -294,8 +311,11 @@ void processo(char* shm, PCB* pcb, int id) {
         PC++;
     }
 
+    kill(getppid(), SIGIOT);
+    raise(SIGSTOP);
     //terminou
-    printf("------------- PC: %d, QTTD1: %d, QTTD2: %d\n",pcb[id].PC,pcb[id].qttD1,pcb[id].qttD2);
+    //printf("------------- PC: %d, QTTD1: %d, QTTD2: %d\n",pcb[id].PC,pcb[id].qttD1,pcb[id].qttD2);
+    exit(0)
     
 }
 
@@ -389,3 +409,11 @@ int peek( Queue* q) {
     return q->items[q->primeiro];
 }
 
+int encontrarIndex(int vetor[], int tamanho, int valor) {
+    for (int i = 0; i < tamanho; i++) {
+        if (vetor[i] == valor) {
+            return i;  // Retorna o índice do valor encontrado
+        }
+    }
+    return -1;  // Retorna -1 se o valor não for encontrado
+}
