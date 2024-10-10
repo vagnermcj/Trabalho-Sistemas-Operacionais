@@ -11,15 +11,17 @@
 #include <pthread.h>
 
 #define N_PROCESSOS 3
-#define SEGUNDOS 1
-#define MAX 10
+#define SEC 1
+#define MAX 100
 
-int GLOBAL_IRQ = -1;
-int GLOBAL_HAS_SYSCALL = 0;
+int GLOBAL_DEVICE = -1;
+int GLOBAL_TIMEOUT = -1;
+int GLOBAL_HAS_SYSCALL = -1;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Estrutura da fila
 struct Queue {
+    char* nome;
     int items[N_PROCESSOS];
     int primeiro, ultimo;
 };
@@ -28,7 +30,7 @@ void SignalHandler(int sinal);
 void Syscall(char Dx, char Op,char* shm);
 void processo(char* shm);
 void InterruptController();
-void initQueue(struct Queue* q);
+void initQueue(struct Queue* q, char* nome);
 void printQueue(struct Queue* q);
 int isFull(struct Queue* q);
 int isEmpty(struct Queue* q);
@@ -41,17 +43,18 @@ int main(void) {
     struct Queue blocked_D1;
     struct Queue blocked_D2;
     struct Queue ready_processes;
+    struct Queue exec_process;
     char systemcall, *sc;
     int pidInterrupter;
     int pidProcesses[N_PROCESSOS]; 
     int fd[2];      // Pipe para comunicação de dispositivo e operação
     int pipepid[2]; // Pipe para receber o pid dos processos
 
-    initQueue(&blocked_D1);
-    initQueue(&blocked_D2);
-    initQueue(&ready_processes);
-
-    systemcall = shmget (IPC_PRIVATE, 2*sizeof(char), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
+    initQueue(&blocked_D1, "Blocked_1");
+    initQueue(&blocked_D2, "Blocked_2");
+    initQueue(&ready_processes, "Ready");
+    initQueue(&exec_process, "Active");
+    systemcall = shmget (IPC_PRIVATE, 2*sizeof(char), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR); //Shm para as informacoes de Device e Operation
     
 
 
@@ -109,31 +112,21 @@ int main(void) {
             pthread_mutex_unlock(&mutex);
         }
 
-        kill(peek(&ready_processes), SIGCONT); //Primeiro da fila ativo
+        int current = dequeue(&ready_processes); 
+        enqueue(&exec_process, current);
+        kill(current, SIGCONT); //Processo Ativo
         kill(pidInterrupter, SIGCONT); //Interrupter Ativo
+        
+        printQueue(&ready_processes);
+        printQueue(&exec_process);
+        printQueue(&blocked_D1);
+        printQueue(&blocked_D2);
+        printf("\n");
 
         while (1) {
-            //system("clear");
-            printf("Fila de processos prontos: ");
-            printQueue(&ready_processes);
-            printf("Fila de bloqueio do dispositivo 1: ");
-            printQueue(&blocked_D1);
-            printf("Fila de bloqueio do dispositivo 2: ");
-            printQueue(&blocked_D2);
-            if (GLOBAL_IRQ != -1) { //Tratamento interrupcao
-                switch (GLOBAL_IRQ) {
-                    case 0: 
-                        if (!isEmpty(&ready_processes)) {
-                            int current_process = dequeue(&ready_processes);
-                            printf("Processo %d colocado no final da fila de prontos\n", current_process);
-                            kill(current_process, SIGSTOP); 
-                            enqueue(&ready_processes, current_process);
-                            int next_process = peek(&ready_processes);
-                            if (next_process != -1) {
-                                kill(next_process, SIGCONT); 
-                            }
-                        }
-                        break;
+            
+            if (GLOBAL_DEVICE != -1) { //Tratamento interrupcao
+                switch (GLOBAL_DEVICE) {
                     case 1: 
                         if (!isEmpty(&blocked_D1)) {
                             int released_process = dequeue(&blocked_D1);
@@ -149,7 +142,24 @@ int main(void) {
                         }
                         break;    
                 }
-                GLOBAL_IRQ = -1;
+                GLOBAL_DEVICE = -1;
+            }
+
+            if(GLOBAL_TIMEOUT != -1 && GLOBAL_HAS_SYSCALL == -1)
+            {
+                if (!isEmpty(&exec_process)) {
+                    kill(peek(&exec_process), SIGSTOP); 
+                    int current_process = dequeue(&exec_process);
+                    printf("Processo %d colocado no final da fila de prontos\n", current_process);
+                    enqueue(&ready_processes, current_process);
+                    int next_process = peek(&ready_processes);
+                    if (next_process != -1) {
+                        dequeue(&ready_processes);
+                        enqueue(&exec_process, next_process);
+                        kill(next_process, SIGCONT); 
+                    }
+                }
+                GLOBAL_TIMEOUT = -1;
             }
 
 
@@ -158,7 +168,7 @@ int main(void) {
                 char Dx = sc[0];
                 char Op = sc[1];
                 printf("DEVICE %c / OP %c\n", Dx, Op);
-                int pidsyscall = dequeue(&ready_processes); //Tira o processo q fez a syscall da fila
+                int pidsyscall = dequeue(&exec_process); //Tira o processo q fez a syscall da fila
                 kill(pidsyscall, SIGSTOP); //Para ele
                 if (Dx == '1') { //Atribui a uma fila de blocked
                     enqueue(&blocked_D1, pidsyscall);
@@ -167,12 +177,29 @@ int main(void) {
                 }
                 int next_process = peek(&ready_processes); //Ativa o proximo da fila 
                 if (next_process != -1) {
+                    dequeue(&ready_processes);
+                    enqueue(&exec_process, next_process);
                     kill(next_process, SIGCONT); 
                 }
 
-                GLOBAL_HAS_SYSCALL = 0;
+                GLOBAL_HAS_SYSCALL = -1;
             }
 
+            if(isEmpty(&exec_process) && !isEmpty(&ready_processes))
+            {
+                int next_process = peek(&ready_processes);
+                    if (next_process != -1) {
+                        dequeue(&ready_processes);
+                        enqueue(&exec_process, next_process);
+                        kill(next_process, SIGCONT); 
+                    }
+            }
+
+            printQueue(&ready_processes);
+            printQueue(&exec_process);
+            printQueue(&blocked_D1);
+            printQueue(&blocked_D2);
+            printf("\n");
             sleep(1); // Pausa no loop para evitar consumo excessivo de CPU
         }
     }
@@ -189,15 +216,15 @@ void SignalHandler(int sinal) {
     switch (sinal) {
         case SIGUSR1:
             printf("Device 1 liberado\n");
-            GLOBAL_IRQ = 1;
+            GLOBAL_DEVICE = 1;
             break;
         case SIGUSR2: 
             printf("Device 2 liberado\n");
-            GLOBAL_IRQ = 2;
+            GLOBAL_DEVICE = 2;
             break;
         case SIGTERM: 
             printf("Timeout\n");
-            GLOBAL_IRQ = 0;
+            GLOBAL_TIMEOUT = 0;
             break;
         case SIGTSTP:
             printf("Syscall\n");
@@ -217,12 +244,14 @@ void processo(char* shm) {
     char Op;
     int f;
     raise(SIGSTOP);
+    srand ( time(NULL) );
     while (PC < MAX) {
+        sleep(1);
         printf("Processo executando: %d\n", getpid());
-        d = rand() - 74;
+        d = rand();
         f  = (d % 100) + 1;
-        sleep(0.5);
-        if (f < 15) { 
+        printf("\n-------------------------%d------------------\n", f);
+        if (f < 20) { 
             printf("SYSCALL PROCESSO %d\n", getpid());
             if (d % 2) 
                 Dx = '1';
@@ -238,7 +267,7 @@ void processo(char* shm) {
             Syscall(Dx, Op, shm);   
             kill(getppid(), SIGTSTP);
         }
-        sleep(0.5);
+        sleep(1);
         PC++;
     }
 }
@@ -248,39 +277,48 @@ void InterruptController() {
     int parent_id = getppid();
 
     while (1) {
-        if (((double) rand() / RAND_MAX) <= 0.5) {
+        int random_num = (((double) rand()) / RAND_MAX);
+        printf("\n ------- %d ------", random_num);
+        if ( random_num <= 0.3) {
             kill(parent_id, SIGUSR1);
         }
-        if (((double) rand() / RAND_MAX) <= 0.8) {
+        else if (random_num <= 0.6) {
             kill(parent_id, SIGUSR2);
         }
-        usleep(SEGUNDOS * 1000000);
+        usleep(SEC * 1000000);
         kill(parent_id, SIGTERM);
     }
 }
 
 // Funções relacionadas à fila
-void initQueue(struct Queue* q) {
+void initQueue(struct Queue* q, char* nome) {
+    q->nome = nome;
     q->primeiro = -1;
     q->ultimo = -1;
+    printf("\n_____ Na Init ______\n\n");
+    printQueue(q);
 }
 
 void printQueue(struct Queue* q) {
-    if (q->primeiro == -1) {
-        printf("A fila está vazia.\n");
+    if (isEmpty(q)) {
+        printf("A fila %s está vazia.\n", q->nome);
         return;
     }
 
-    printf("Fila: ");
-    for (int i = q->primeiro; i <= q->ultimo; i++) {
+    printf("Fila %s: ", q->nome);
+    int i = q->primeiro;
+    while (i != q->ultimo) {
         printf("%d ", q->items[i]);
+        i = (i + 1) % N_PROCESSOS;  // Avança de forma circular
     }
-    printf("\n");
+    printf("%d\n", q->items[q->ultimo]);  // Imprime o último elemento
 }
 
+
 int isFull(struct Queue* q) {
-    return q->ultimo == N_PROCESSOS - 1;
+    return (q->ultimo + 1) % N_PROCESSOS == q->primeiro;
 }
+
 
 int isEmpty(struct Queue* q) {
     return q->primeiro == -1;
@@ -291,13 +329,14 @@ void enqueue(struct Queue* q, int value) {
         printf("-----------------Fila cheia!------------------------\n");
     } else {
         if (isEmpty(q)) {
-            q->primeiro = 0; // Definir o primeiro quando o primeiro elemento for inserido
+            q->primeiro = 0;  // Define o índice inicial
         }
-        q->ultimo++;
+        q->ultimo = (q->ultimo + 1) % N_PROCESSOS;  // Incrementa de forma circular
         q->items[q->ultimo] = value;
-        printf("Inserido %d na fila\n", value);
+        printf("Inserido %d na fila %s\n", value, q->nome);
     }
 }
+
 
 int dequeue(struct Queue* q) {
     int item;
@@ -306,14 +345,16 @@ int dequeue(struct Queue* q) {
         return -1;
     } else {
         item = q->items[q->primeiro];
-        q->primeiro++;
-        if (q->primeiro > q->ultimo) {
-            // Reseta a fila após remover todos os elementos
+        q->primeiro = (q->primeiro + 1) % N_PROCESSOS;  // Avança de forma circular
+        if (q->primeiro == (q->ultimo + 1) % N_PROCESSOS) {
+            // Se a fila estiver vazia após a remoção
             q->primeiro = q->ultimo = -1;
         }
+        printf("\nRemovido %d da fila %s\n\n", item, q->nome);
         return item;
     }
 }
+
 
 int peek(struct Queue* q) {
     if (isEmpty(q)) {
@@ -321,3 +362,4 @@ int peek(struct Queue* q) {
     }
     return q->items[q->primeiro];
 }
+
