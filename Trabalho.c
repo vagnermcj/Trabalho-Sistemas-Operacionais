@@ -12,63 +12,66 @@
 
 #define N_PROCESSOS 3
 #define SEC 1
-#define MAX 100
+#define MAX 5
 
 int GLOBAL_DEVICE = -1;
 int GLOBAL_TIMEOUT = -1;
 int GLOBAL_HAS_SYSCALL = -1;
+int GLOBAL_TERMINATED = -1;
 pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Estrutura da fila
-struct Queue {
+struct queue {
     char* nome;
     int items[N_PROCESSOS];
     int primeiro, ultimo;
-};
+};typedef struct queue Queue;
+
+//Estrutura de PCB
+struct pcb {
+    int PC; 
+    char state[200]; //3 Estados Executing, Blocked DX Op, Terminated
+    int qttD1;
+    int qttD2;
+};typedef struct pcb PCB;
+
 // Prototipos das funções
 void SignalHandler(int sinal);
 void Syscall(char Dx, char Op,char* shm);
-void processo(char* shm);
+void processo(char* shm, PCB* pcb, int id);
 void InterruptController();
-void initQueue(struct Queue* q, char* nome);
-void printQueue(struct Queue* q);
-int isFull(struct Queue* q);
-int isEmpty(struct Queue* q);
-void enqueue(struct Queue* q, int value);
-int dequeue(struct Queue* q);
-int peek(struct Queue* q);
+void initQueue(Queue* q, char* nome);
+void printQueue( Queue* q);
+int isFull( Queue* q);
+int isEmpty( Queue* q);
+void enqueue( Queue* q, int value);
+int dequeue( Queue* q);
+int peek( Queue* q);
 
 
 int main(void) {
-    struct Queue blocked_D1;
-    struct Queue blocked_D2;
-    struct Queue ready_processes;
-    struct Queue exec_process;
+    Queue blocked_D1;
+    Queue blocked_D2;
+    Queue ready_processes;
+    Queue exec_process;
+    Queue terminated_process;
+    int ProcessControlBlock;
+    PCB *pPCB;
     char systemcall, *sc;
     int pidInterrupter;
     int pidProcesses[N_PROCESSOS]; 
-    int fd[2];      // Pipe para comunicação de dispositivo e operação
-    int pipepid[2]; // Pipe para receber o pid dos processos
+
 
     initQueue(&blocked_D1, "Blocked_1");
     initQueue(&blocked_D2, "Blocked_2");
     initQueue(&ready_processes, "Ready");
     initQueue(&exec_process, "Active");
+    initQueue(&terminated_process, "Terminated");
     systemcall = shmget (IPC_PRIVATE, 2*sizeof(char), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR); //Shm para as informacoes de Device e Operation
-    
-
-
-    if ((pipe(fd) < 0) || (pipe(pipepid) < 0)) {
-        puts("Erro ao abrir os pipes\n");
-        exit(-1);
-    }
-
+    ProcessControlBlock = shmget (IPC_PRIVATE, N_PROCESSOS*sizeof(PCB), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
+     
     pidInterrupter = fork();
     if (pidInterrupter == 0) { //Interrupter
-        close(fd[0]);
-        close(fd[1]);
-        close(pipepid[0]);
-        close(pipepid[1]);
         raise(SIGSTOP);
         InterruptController();  
         exit(0);
@@ -80,28 +83,21 @@ int main(void) {
             signal(SIGUSR1, SignalHandler);  
             signal(SIGUSR2, SignalHandler);  
             signal(SIGTERM, SignalHandler);  
-            signal(SIGTSTP, SignalHandler);
+            signal(SIGTSTP, SignalHandler); 
+            signal(SIGIO, SignalHandler);
         }
         for (int i = 0; i < N_PROCESSOS; i++) {
             pidProcesses[i] = fork();
             if (pidProcesses[i] == 0) //Filho
             {  
-                close(fd[0]);
-                close(pipepid[0]);
+                pPCB = (PCB*) shmat (ProcessControlBlock, 0, 0);
                 sc = (char*)shmat(systemcall,0,0); //Conecta os filhos com shm
                 int pid = getpid();  // Pega o PID do processo filho
-                //Mutex Lock
-                pthread_mutex_lock(&mutex);
-                write(pipepid[1], &pid, sizeof(int));
-                pthread_mutex_unlock(&mutex);
-                processo(sc);  // Executa a função do processo
+                processo(sc, pPCB, i);  // Executa a função do processo
                 exit(0);  // Saída do processo filho
             }
         }
 
-
-        close(fd[1]);        
-        close(pipepid[1]);   
 
         sc = (char*)shmat(systemcall,0,0); //Conecta o pai com shm
         
@@ -121,10 +117,23 @@ int main(void) {
         printQueue(&exec_process);
         printQueue(&blocked_D1);
         printQueue(&blocked_D2);
+        printQueue(&terminated_process);
         printf("\n");
 
         while (1) {
-            
+
+            if(GLOBAL_TERMINATED == 1)
+            {
+                int terminated = dequeue(&exec_process);
+                enqueue(&terminated_process, terminated);
+                if(!isEmpty(&ready_processes))
+                {
+                    int next = dequeue(&ready_processes);
+                    enqueue(&exec_process, next);
+                }
+                GLOBAL_TERMINATED = -1;
+            }
+
             if (GLOBAL_DEVICE != -1) { //Tratamento interrupcao
                 switch (GLOBAL_DEVICE) {
                     case 1: 
@@ -199,6 +208,7 @@ int main(void) {
             printQueue(&exec_process);
             printQueue(&blocked_D1);
             printQueue(&blocked_D2);
+            printQueue(&terminated_process);
             printf("\n");
             sleep(1); // Pausa no loop para evitar consumo excessivo de CPU
         }
@@ -229,6 +239,9 @@ void SignalHandler(int sinal) {
         case SIGTSTP:
             printf("Syscall\n");
             GLOBAL_HAS_SYSCALL = 1;
+        case SIGIO:
+            printf("Terminated\n");
+            GLOBAL_TERMINATED = 1;
     }
 }
 
@@ -237,15 +250,20 @@ void Syscall(char Dx, char Op, char* shm) {
     shm[1] = Op;
 }
 
-void processo(char* shm) {
+void processo(char* shm, PCB* pcb, int id) {
     int PC = 0;
     int d;
     char Dx;
     char Op;
     int f;
+
+    pcb[id].PC = PC; 
+    pcb[id].qttD1 = 0;
+    pcb[id].qttD2 = 0;  
     raise(SIGSTOP);
     srand ( time(NULL) );
     while (PC < MAX) {
+        pcb[id].PC = PC; 
         sleep(1);
         printf("Processo executando: %d\n", getpid());
         d = rand();
@@ -253,9 +271,15 @@ void processo(char* shm) {
         if (f < 20) { 
             printf("SYSCALL PROCESSO %d\n", getpid());
             if (d % 2) 
+            {
                 Dx = '1';
+                pcb[id].qttD1++;
+            }
             else 
+            {
                 Dx = '2';
+                pcb[id].qttD2++;
+            }
 
             if (d % 3 == 1) 
                 Op = 'R';
@@ -269,6 +293,10 @@ void processo(char* shm) {
         sleep(1);
         PC++;
     }
+
+    //terminou
+    printf("------------- PC: %d, QTTD1: %d, QTTD2: %d\n",pcb[id].PC,pcb[id].qttD1,pcb[id].qttD2);
+    
 }
 
 void InterruptController() {
@@ -289,7 +317,7 @@ void InterruptController() {
 }
 
 // Funções relacionadas à fila
-void initQueue(struct Queue* q, char* nome) {
+void initQueue(Queue* q, char* nome) {
     q->nome = nome;
     q->primeiro = -1;
     q->ultimo = -1;
@@ -297,7 +325,7 @@ void initQueue(struct Queue* q, char* nome) {
     printQueue(q);
 }
 
-void printQueue(struct Queue* q) {
+void printQueue(Queue* q) {
     if (isEmpty(q)) {
         printf("A fila %s está vazia.\n", q->nome);
         return;
@@ -313,16 +341,16 @@ void printQueue(struct Queue* q) {
 }
 
 
-int isFull(struct Queue* q) {
+int isFull( Queue* q) {
     return (q->ultimo + 1) % N_PROCESSOS == q->primeiro;
 }
 
 
-int isEmpty(struct Queue* q) {
+int isEmpty( Queue* q) {
     return q->primeiro == -1;
 }
 
-void enqueue(struct Queue* q, int value) {
+void enqueue( Queue* q, int value) {
     if (isFull(q)) {
         printf("-----------------Fila cheia!------------------------\n");
     } else {
@@ -336,7 +364,7 @@ void enqueue(struct Queue* q, int value) {
 }
 
 
-int dequeue(struct Queue* q) {
+int dequeue( Queue* q) {
     int item;
     if (isEmpty(q)) {
         printf("Fila vazia!\n");
@@ -354,7 +382,7 @@ int dequeue(struct Queue* q) {
 }
 
 
-int peek(struct Queue* q) {
+int peek( Queue* q) {
     if (isEmpty(q)) {
         return -1;
     }
