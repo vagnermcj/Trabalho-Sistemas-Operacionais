@@ -93,7 +93,6 @@ int main(void) {
             {  
                 pPCB = (PCB*) shmat (ProcessControlBlock, 0, 0);
                 sc = (char*)shmat(systemcall,0,0); //Conecta os filhos com shm
-                int pid = getpid();  // Pega o PID do processo filho
                 processo(sc, pPCB, i);  // Executa a função do processo
                 exit(0);  // Saída do processo filho
             }
@@ -101,6 +100,7 @@ int main(void) {
 
 
         sc = (char*)shmat(systemcall,0,0); //Conecta o pai com shm
+        pPCB = (PCB*) shmat (ProcessControlBlock, 0, 0);
         
         for(int i =0; i<N_PROCESSOS;i++) //Filhos criados, agora coloca na fila
         {
@@ -122,18 +122,8 @@ int main(void) {
         printf("\n");
 
         while (1) {
-
-            if(GLOBAL_TERMINATED == 1 && GLOBAL_HAS_SYSCALL == -1)
-            {
-                int terminated = dequeue(&exec_process);
-                enqueue(&terminated_process, terminated);
-                if(!isEmpty(&ready_processes))
-                {
-                    int next = dequeue(&ready_processes);
-                    enqueue(&exec_process, next);
-                }
-                GLOBAL_TERMINATED = -1;
-            }
+            if(isFull(&terminated_process))
+                break;
 
             if (GLOBAL_DEVICE != -1) { //Tratamento interrupcao
                 switch (GLOBAL_DEVICE) {
@@ -142,8 +132,10 @@ int main(void) {
                             int released_process = dequeue(&blocked_D1);
                             int index = encontrarIndex(pidProcesses,N_PROCESSOS, released_process);
                             printf("Processo %d com index %d liberado do dispositivo 1\n", released_process, index);
+                              printf("pPCB[index].PC 1 --- %d\n", pPCB[index].PC);
                             if(pPCB[index].PC >= MAX) //Processo deve terminar
                             {
+                                 printf("entrou1\n");
                                 enqueue(&terminated_process, released_process);
                                 kill(released_process, SIGCONT);
                             }
@@ -158,8 +150,10 @@ int main(void) {
                             int released_process = dequeue(&blocked_D2);
                             int index = encontrarIndex(pidProcesses,N_PROCESSOS, released_process);
                             printf("Processo %d com index %d liberado do dispositivo 2\n", released_process, index);
+                            printf("pPCB[index].PC 2--- %d\n", pPCB[index].PC);
                             if(pPCB[index].PC >= MAX) //Processo deve terminar
                             {
+                                printf("entrou2\n");
                                 enqueue(&terminated_process, released_process);
                                 kill(released_process, SIGCONT);
                             }
@@ -171,12 +165,28 @@ int main(void) {
                 GLOBAL_DEVICE = -1;
             }
 
+            if(GLOBAL_TERMINATED == 1 && GLOBAL_HAS_SYSCALL == -1 && !isEmpty(&exec_process))
+            {
+                int terminated = dequeue(&exec_process);
+                printf("dequeue terminater %d\n",terminated);
+                enqueue(&terminated_process, terminated);
+                printQueue(&terminated_process);
+                printQueue(&exec_process);
+                if(!isEmpty(&ready_processes))
+                {
+                    int next = dequeue(&ready_processes);
+                    printf("dequeue next %d\n",next);
+                    enqueue(&exec_process, next);
+                }
+                GLOBAL_TERMINATED = -1;
+                GLOBAL_TIMEOUT = -1;
+            }
+
             if(GLOBAL_TIMEOUT != -1 && GLOBAL_HAS_SYSCALL == -1)
             {
                 if (!isEmpty(&exec_process)) {
                     kill(peek(&exec_process), SIGSTOP); 
                     int current_process = dequeue(&exec_process);
-                    printf("Processo %d colocado no final da fila de prontos\n", current_process);
                     enqueue(&ready_processes, current_process);
                     int next_process = peek(&ready_processes);
                     if (next_process != -1) {
@@ -220,13 +230,16 @@ int main(void) {
                         kill(next_process, SIGCONT); 
                     }
             }
-
+            printf("-----------------------------------------------\n");
             printQueue(&ready_processes);
+            printf("\n");
             printQueue(&exec_process);
+            printf("\n");
             printQueue(&blocked_D1);
             printQueue(&blocked_D2);
             printQueue(&terminated_process);
             printf("\n");
+            printf("-----------------------------------------------\n");
             sleep(1); // Pausa no loop para evitar consumo excessivo de CPU
         }
     }
@@ -235,6 +248,9 @@ int main(void) {
         wait(NULL);
     }
 
+    shmctl(systemcall,IPC_RMID, 0);
+    shmctl(ProcessControlBlock,IPC_RMID, 0);
+    printf("CAbO PORRA\n");
     return 0;
 }
 
@@ -274,15 +290,21 @@ void processo(char* shm, PCB* pcb, int id) {
     char Op;
     int f;
 
+    pthread_mutex_lock(&mutex);
     pcb[id].PC = PC; 
     pcb[id].qttD1 = 0;
     pcb[id].qttD2 = 0;  
+    pthread_mutex_unlock(&mutex);
+
     raise(SIGSTOP);
     srand ( time(NULL) );
+
     while (PC < MAX) {
+        pthread_mutex_lock(&mutex);
         pcb[id].PC = PC; 
+        pthread_mutex_unlock(&mutex);
         sleep(1);
-        printf("Processo executando: %d\n", getpid());
+        printf("Processo executando: %d PC: %d\n", getpid(), PC);
         d = rand();
         f  = (d % 100) + 1;
         if (f < 20) { 
@@ -290,12 +312,17 @@ void processo(char* shm, PCB* pcb, int id) {
             if (d % 2) 
             {
                 Dx = '1';
+                pthread_mutex_lock(&mutex);
                 pcb[id].qttD1++;
+                pthread_mutex_unlock(&mutex);
             }
             else 
             {
                 Dx = '2';
+                pthread_mutex_lock(&mutex);
                 pcb[id].qttD2++;
+                pthread_mutex_lock(&mutex);
+
             }
 
             if (d % 3 == 1) 
@@ -309,14 +336,17 @@ void processo(char* shm, PCB* pcb, int id) {
         }
         sleep(1);
         PC++;
-    }
 
-    kill(getppid(), SIGIOT);
-    raise(SIGSTOP);
+    }
+    pcb[id].PC = PC; 
+
+    printf("Processo %d terminated com PC %d\n", getpid(), pcb[id].PC);
+
+    shmdt(pcb);
+    shmdt(shm);
+    kill(getppid(), SIGIO);
     //terminou
     //printf("------------- PC: %d, QTTD1: %d, QTTD2: %d\n",pcb[id].PC,pcb[id].qttD1,pcb[id].qttD2);
-    exit(0)
-    
 }
 
 void InterruptController() {
