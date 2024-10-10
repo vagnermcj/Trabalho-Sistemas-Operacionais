@@ -250,7 +250,6 @@ void processo(char* shm) {
         printf("Processo executando: %d\n", getpid());
         d = rand();
         f  = (d % 100) + 1;
-        printf("\n-------------------------%d------------------\n", f);
         if (f < 20) { 
             printf("SYSCALL PROCESSO %d\n", getpid());
             if (d % 2) 
@@ -273,12 +272,11 @@ void processo(char* shm) {
 }
 
 void InterruptController() {
-    srand(time(NULL)); 
     int parent_id = getppid();
+    srand(time(NULL));   
 
     while (1) {
-        int random_num = (((double) rand()) / RAND_MAX);
-        printf("\n ------- %d ------", random_num);
+        double random_num = (((double) rand()) / RAND_MAX);
         if ( random_num <= 0.3) {
             kill(parent_id, SIGUSR1);
         }
