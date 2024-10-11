@@ -10,8 +10,8 @@
 #include <string.h>
 #include <pthread.h>
 
-#define N_PROCESSOS 3
-#define MAX 10
+#define N_PROCESSOS 5
+#define MAX 20
 
 int GLOBAL_DEVICE = -1;
 int GLOBAL_TIMEOUT = -1;
@@ -47,6 +47,8 @@ void enqueue( Queue* q, int value);
 int dequeue( Queue* q);
 int peek( Queue* q);
 int encontrarIndex(int vetor[], int tamanho, int valor);
+char* concatena(char* mensagem, char d1, char op);
+void printPCBs(PCB pcbs[], int tamanho);
 
 
 int main(void) {
@@ -127,12 +129,8 @@ int main(void) {
 
             if(GLOBAL_HAS_SYSCALL == 1)
             {
-
-                printf("tomei syscall to no if\n ");
-                printf("GLOBAL_FINISHED_SYSCALL --> %d\n",GLOBAL_FINISHED_SYSCALL);
                 while(GLOBAL_FINISHED_SYSCALL != 1)
                 {
-
                 }
 
                 int pidsyscall = dequeue(&exec_process); //Tira o processo q fez a syscall da fila
@@ -140,7 +138,13 @@ int main(void) {
                 printf("dx e op antes sla\n");
                 char Dx = sc[0];
                 char Op = sc[1];
+                int index = encontrarIndex(pidProcesses,N_PROCESSOS, pidsyscall);
                 printf("DEVICE %c / OP %c\n", Dx, Op);
+                printf("%s\n",pPCB[index].state);
+                char* mensagem = concatena("Bloqueado", Dx, Op);
+                strcpy(pPCB[index].state, mensagem);
+                free(mensagem);
+                printf("%s\n",pPCB[index].state);
                 if (Dx == '1') { //Atribui a uma fila de blocked
                     enqueue(&blocked_D1, pidsyscall);
                 } else if (Dx == '2') {
@@ -149,6 +153,8 @@ int main(void) {
 
                 if (!isEmpty(&ready_processes)) {
                     int next_process = dequeue(&ready_processes);; //Ativa o proximo da fila 
+                    int index = encontrarIndex(pidProcesses, N_PROCESSOS, next_process);
+                    strcpy(pPCB[index].state, "Estado: Ativo");
                     enqueue(&exec_process, next_process);
                     kill(next_process, SIGCONT); 
                 }
@@ -169,11 +175,15 @@ int main(void) {
                             printf("Processo %d com index %d liberado do dispositivo 1\n", released_process, index);
                             if(pPCB[index].PC >= MAX) //Processo deve terminar
                             {
+                                strcpy(pPCB[index].state, "Estado: Terminado");
                                 enqueue(&terminated_process, released_process);
                                 kill(released_process, SIGCONT);
                             }
                             else
+                            {
+                                strcpy(pPCB[index].state, "Estado: Pronto");
                                 enqueue(&ready_processes, released_process);                           
+                            }
                         }
                         break;
                     case 2: 
@@ -182,11 +192,15 @@ int main(void) {
                             int index = encontrarIndex(pidProcesses,N_PROCESSOS, released_process);
                             if(pPCB[index].PC >= MAX) //Processo deve terminar
                             {
+                                strcpy(pPCB[index].state, "Estado: Terminado");
                                 enqueue(&terminated_process, released_process);
                                 kill(released_process, SIGCONT);
                             }
                             else
+                            {
+                                strcpy(pPCB[index].state, "Estado: Pronto");
                                 enqueue(&ready_processes, released_process);
+                            }
                         }
                         break;    
                 }
@@ -200,14 +214,16 @@ int main(void) {
                 if(pPCB[index].PC >= MAX && GLOBAL_HAS_SYSCALL == -1) //Terminated se PC > MAX
                 {
                     int terminated = dequeue(&exec_process);
-                    printf("dequeue terminater %d\n",terminated);
+                    int index = encontrarIndex(pidProcesses, N_PROCESSOS, terminated);
+                    strcpy(pPCB[index].state, "Estado: Terminado");
                     enqueue(&terminated_process, terminated);
                     printQueue(&terminated_process);
                     printQueue(&exec_process);
                     if(!isEmpty(&ready_processes))
                     {
                         int next = dequeue(&ready_processes);
-                        printf("dequeue next %d\n",next);
+                        int index = encontrarIndex(pidProcesses, N_PROCESSOS, next);
+                        strcpy(pPCB[index].state, "Estado: Ativo");
                         enqueue(&exec_process, next);
                     }
                     GLOBAL_TERMINATED = -1;
@@ -216,14 +232,17 @@ int main(void) {
             }
             if(GLOBAL_TIMEOUT != -1 && GLOBAL_HAS_SYSCALL == -1 && !isEmpty(&exec_process)) //Tira por Timeout
             {
-                printf("GLOBAL_HAS_SYSCALL --> %d\n",GLOBAL_HAS_SYSCALL);
                 if (!isEmpty(&exec_process)) {
                     kill(peek(&exec_process), SIGSTOP); 
                     int current_process = dequeue(&exec_process);
+                    int index = encontrarIndex(pidProcesses, N_PROCESSOS, current_process);
+                    strcpy(pPCB[index].state, "Estado: Pronto");
                     enqueue(&ready_processes, current_process);
                     int next_process = peek(&ready_processes);
                     if (next_process != -1) {
                         dequeue(&ready_processes);
+                        int index = encontrarIndex(pidProcesses, N_PROCESSOS, next_process);
+                        strcpy(pPCB[index].state, "Estado: Ativo");
                         enqueue(&exec_process, next_process);
                         kill(next_process, SIGCONT); 
                     }
@@ -236,6 +255,8 @@ int main(void) {
                 int next_process = peek(&ready_processes);
                     if (next_process != -1) {
                         dequeue(&ready_processes);
+                        int index = encontrarIndex(pidProcesses, N_PROCESSOS, next_process);
+                        strcpy(pPCB[index].state, "Estado: Ativo");
                         enqueue(&exec_process, next_process);
                         kill(next_process, SIGCONT); 
                     }
@@ -260,8 +281,10 @@ int main(void) {
     }
 
     kill(pidInterrupter, SIGKILL);
+    printPCBs(pPCB, N_PROCESSOS);
     shmctl(systemcall,IPC_RMID, 0);
     shmctl(ProcessControlBlock,IPC_RMID, 0);
+
     printf("CAbO PORRA\n");
     return 0;
 }
@@ -304,6 +327,7 @@ void processo(char* shm, PCB* pcb, int id) {
     int f;
 
     pcb[id].PC = PC; 
+    strcpy(pcb[id].state, "Estado: Pronto");
     pcb[id].qttD1 = 0;
     pcb[id].qttD2 = 0;  
    
@@ -313,63 +337,35 @@ void processo(char* shm, PCB* pcb, int id) {
     while (PC < MAX) {
         usleep(500000); //Sleep 500ms
        
-        printf("pc do processo %d mutex ante dos ++ --> %d \n",getpid(),pcb[id].PC);
         pcb[id].PC += 1; 
-        printf("pc do processo %d mutex depois dos ++ --> %d \n",getpid(),pcb[id].PC);
        
         fflush(stdout);
         d = rand();
         f  = (d % 100) + 1;
         printf("d --> %d  f --> %d\n",d,f);
-        if (f < 5) { 
+        if (f < 15) { 
             kill(getppid(), SIGPWR);
            
-            printf("SYSCALL PROCESSO %d\n", getpid());
+            printf("!!!!!!!!!!!!!!!!!! SYSCALL PROCESSO %d !!!!!!!!!!!!!!!!!!!!!\n", getpid());
             if (d % 2) {
-                printf("if antes de atribuir valor d/2 dx --> %c\n",Dx);
                 Dx = '1';
-                printf("if depois de atribuir valor d/2 dx --> %c\n",Dx);
-
+                pcb[id].qttD1 += 1;
             }
             else {
-                printf("else antes de atribuir valor d/2 dx --> %c\n",Dx);
                 Dx = '2';
-                printf("else depois de atribuir valor d/2 dx --> %c\n",Dx);
-
+                pcb[id].qttD2 += 1;
             }
             
-
             if (d % 5 == 1)
-            {
-                printf("if antes de atribuir valor d/5 dop --> %c\n",Op);
                 Op = 'R';
-                printf("if antes de atribuir valor d/5 dop --> %c\n",Op);
-
-            } 
             else if (d % 3 == 1)
-            {
-                printf("elseif antes de atribuir valor d/3 dop --> %c\n",Op);
                 Op = 'W';
-                printf("elseif antes de atribuir valor d/3 dop --> %c\n",Op);
-            } 
             else
-            {
-                printf("elseif antes de atribuir valor d/3 dop --> %c\n",Op);
                 Op = 'X';
-                printf("elseif antes de atribuir valor d/3 dop --> %c\n",Op);
 
-            } 
 
-            printf(" shm[0] --> %c, op --> %c\n",  shm[0], Dx );
             shm[0] = Dx;
-            printf(" shm[0.1] --> %c, op --> %c\n", shm[0], Dx );
-
-            printf(" shm[1] --> %c, op --> %c\n",  shm[1], Op );
-            shm[1] = Op;
-            printf(" shm[1.1] --> %c, op --> %c\n",  shm[1], Op );
-
-            printf("IF dx %c op %c\n", Dx, Op);
-           
+            shm[1] = Op;       
             kill(getppid(), SIGTSTP);
             raise(SIGSTOP);
         }
@@ -377,7 +373,7 @@ void processo(char* shm, PCB* pcb, int id) {
         usleep(500000); //Sleep 500ms
     }
 
-    printf("Processo %d terminated com PC %d\n", getpid(), pcb[id].PC);
+    printf("Processo %d terminou com PC %d\n", getpid(), pcb[id].PC);
 
     shmdt(pcb);
     shmdt(shm);
@@ -388,7 +384,6 @@ void InterruptController() {
     raise(SIGSTOP);
     int parent_id = getppid();
     srand(time(NULL));   
-    printf("ENTRE INTERRUPTER\n");
     while (1) {
         double random_num = (((double) rand()) / RAND_MAX);
         
@@ -488,4 +483,34 @@ int encontrarIndex(int vetor[], int tamanho, int valor) {
         }
     }
     return -1;  // Retorna -1 se o valor não for encontrado
+}
+
+char* concatena(char* mensagem, char d1, char op) {
+    // Calcula o tamanho necessário para a nova mensagem
+    // "Bloqueado " + 1 char para d1 + " Op " + 1 char para op + null terminator
+    int tamanho = strlen(mensagem) + 10; // Mensagem, espaço para d1, " Op ", op e '\0'
+    
+    // Aloca memória para a nova string
+    char* resultado = (char*)malloc(tamanho * sizeof(char));
+    
+    if (resultado == NULL) {
+        perror("Erro ao alocar memória");
+        exit(1);
+    }
+
+    // Concatena a mensagem com d1 e op
+    sprintf(resultado, "Estado: %s D%c Operacao %c\n", mensagem, d1, op);
+
+    return resultado;
+}
+
+void printPCBs(PCB pcbs[], int tamanho) {
+    for (int i = 0; i < tamanho; i++) {
+        printf("Processo %d:\n", i + 1);
+        printf("  Program Counter (PC): %d\n", pcbs[i].PC);
+        printf("  Estado: %s\n", pcbs[i].state);
+        printf("  Quantidade de D1: %d\n", pcbs[i].qttD1);
+        printf("  Quantidade de D2: %d\n", pcbs[i].qttD2);
+        printf("-------------------------\n");  // Separação visual entre processos
+    }
 }
