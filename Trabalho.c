@@ -10,8 +10,8 @@
 #include <string.h>
 #include <pthread.h>
 
-#define N_PROCESSOS 5
-#define MAX 20
+#define N_PROCESSOS 3
+#define MAX 3
 
 int GLOBAL_DEVICE = -1;
 int GLOBAL_TIMEOUT = -1;
@@ -67,11 +67,12 @@ int main(void) {
     int pidProcesses[N_PROCESSOS]; 
 
 
-    initQueue(&blocked_D1, "de bloqueado_1");
-    initQueue(&blocked_D2, "de bloqueado_2");
+    initQueue(&blocked_D1, "de Bloqueado_1");
+    initQueue(&blocked_D2, "de Bloqueado_2");
     initQueue(&ready_processes, "de Pronto");
-    initQueue(&exec_process, "de ativo");
-    initQueue(&terminated_process, "de terminado");
+    initQueue(&exec_process, "de Ativo");
+    initQueue(&terminated_process, "de Terminado");
+    printf("-------------------------------------------\n");
     systemcall = shmget (IPC_PRIVATE, 2*sizeof(char), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR); //Shm para as informacoes de Device e Operation
     ProcessControlBlock = shmget (IPC_PRIVATE, N_PROCESSOS*sizeof(PCB), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
 
@@ -98,31 +99,35 @@ int main(void) {
         for (int i = 0; i < N_PROCESSOS; i++) {
             pidProcesses[i] = fork();
             if (pidProcesses[i] == 0) //Filho
-            {  
-               
+            {         
                 processo(sc, pPCB, i);  // Executa a função do processo
                 exit(0);  // Saída do processo filho
             }
         }
 
-        printf("------------- PID SIMULATOR: %d -------------\n", getpid());
-
         for(int i =0; i<N_PROCESSOS;i++) //Filhos criados, agora coloca na fila
         {
-            //
             enqueue(&ready_processes, pidProcesses[i]);
-            //
+            printf("\n");
         }
 
         int current = dequeue(&ready_processes); 
         enqueue(&exec_process, current);
+        printf("\n");
         kill(current, SIGCONT); //Processo Ativo
         kill(pidInterrupter, SIGCONT); //Interrupter Ativo
         
+
+        
+        printf("-------------------- INICIALIZA (PID: %d ) -----------------------\n", getpid());
         printQueue(&ready_processes);
+        printf("\n");
         printQueue(&exec_process);
+        printf("\n");
         printQueue(&blocked_D1);
+        printf("\n");
         printQueue(&blocked_D2);
+        printf("\n");
         printQueue(&terminated_process);
         printf("\n");
 
@@ -132,7 +137,6 @@ int main(void) {
             
             if(GLOBAL_STOP_SIMULATOR == 1)
             {
-                printf("VAI SER PARADO\n");
                 kill(pidInterrupter, SIGSTOP);             
                 for (int i = 0; i < N_PROCESSOS; i++)
                 {
@@ -157,17 +161,12 @@ int main(void) {
                 }
 
                 int pidsyscall = dequeue(&exec_process); //Tira o processo q fez a syscall da fila
-                //kill(pidsyscall, SIGSTOP); //Para ele
-                printf("dx e op antes sla\n");
                 char Dx = sc[0];
                 char Op = sc[1];
                 int index = encontrarIndex(pidProcesses,N_PROCESSOS, pidsyscall);
-                printf("DEVICE %c / OP %c\n", Dx, Op);
-                printf("%s\n",pPCB[index].state);
-                char* mensagem = concatena("Bloqueado", Dx, Op);
+                char* mensagem = concatena("Estado: Bloqueado", Dx, Op);
                 strcpy(pPCB[index].state, mensagem);
                 free(mensagem);
-                printf("%s\n",pPCB[index].state);
                 if (Dx == '1') { //Atribui a uma fila de blocked
                     enqueue(&blocked_D1, pidsyscall);
                 } else if (Dx == '2') {
@@ -195,7 +194,6 @@ int main(void) {
                         if (!isEmpty(&blocked_D1)) {
                             int released_process = dequeue(&blocked_D1);
                             int index = encontrarIndex(pidProcesses,N_PROCESSOS, released_process);
-                            printf("Processo %d com index %d liberado do dispositivo 1\n", released_process, index);
                             if(pPCB[index].PC >= MAX) //Processo deve terminar
                             {
                                 strcpy(pPCB[index].state, "Estado: Terminado");
@@ -285,13 +283,15 @@ int main(void) {
                     }
             }
 
-            printf("-------------------- COMECO %d -----------------------\n", getpid());
+            printf("-------------------- COMECO (PID: %d ) -----------------------\n", getpid());
             printQueue(&ready_processes);
             printf("\n");
             printQueue(&exec_process);
             printf("\n");
             printQueue(&blocked_D1);
+            printf("\n");
             printQueue(&blocked_D2);
+            printf("\n");
             printQueue(&terminated_process);
             printf("\n");
             printf("--------------------- FIM ----------------------\n");
@@ -304,10 +304,12 @@ int main(void) {
     }
 
     kill(pidInterrupter, SIGKILL);
-    printf("Finalizando kernel Sim......\n");
+     printf("\n\n\n-----------------------------------------------\n\n\n");
+    printf("Finalizando kernel Sim......\n\n");
     printPCBs(pPCB, N_PROCESSOS);
     shmctl(systemcall,IPC_RMID, 0);
     shmctl(ProcessControlBlock,IPC_RMID, 0);
+    printf("\n\n\n-----------------------------------------------\n\n\n");
     return 0;
 }
 
@@ -327,15 +329,15 @@ void SignalHandler(int sinal) {
             GLOBAL_TIMEOUT = 0;
             break;
         case SIGTSTP:
-            printf(" FINISHED Syscall\n");
+            printf("Processo Finalizou Syscall\n");
             GLOBAL_FINISHED_SYSCALL = 1;
             break;
         case SIGIO:
-            printf("Terminated\n");
+            printf("Processo terminou\n");
             GLOBAL_TERMINATED = 1;
             break;
         case SIGPWR:
-            printf("START SYSCALL\n");
+            printf("Processo Iniciou Syscall\n");
             GLOBAL_HAS_SYSCALL = 1;
             break;
         case SIGQUIT:
@@ -369,11 +371,8 @@ void processo(char* shm, PCB* pcb, int id) {
         fflush(stdout);
         d = rand();
         f  = (d % 100) + 1;
-        printf("d --> %d  f --> %d\n",d,f);
         if (f < 15) { 
             kill(getppid(), SIGPWR);
-           
-            printf("!!!!!!!!!!!!!!!!!! SYSCALL PROCESSO %d !!!!!!!!!!!!!!!!!!!!!\n", getpid());
             if (d % 2) {
                 Dx = '1';
                 pcb[id].qttD1 += 1;
@@ -421,9 +420,8 @@ void InterruptController() {
             kill(parent_id, SIGUSR2);
         }
         usleep(1000000); //sleep 1 sec
-        if(kill(parent_id, SIGTERM) == 0)
-            printf("\nSINAL do interrupter ENVIADO\n");
-        else{
+        if(kill(parent_id, SIGTERM) != 0)
+        {
             printf("\nSINAL do interrupter nao foi ENVIADO\n");
             exit(0);
         }
@@ -435,8 +433,8 @@ void initQueue(Queue* q, char* nome) {
     q->nome = nome;
     q->primeiro = -1;
     q->ultimo = -1;
-    printf("\n_____ Na Init ______\n\n");
     printQueue(q);
+    printf("\n");
 }
 
 void printQueue(Queue* q) {
@@ -535,7 +533,7 @@ void printPCBs(PCB pcbs[], int tamanho) {
     for (int i = 0; i < tamanho; i++) {
         printf("Processo %d: %d\n", i + 1, pcbs[i].PID);
         printf("  Program Counter (PC): %d\n", pcbs[i].PC);
-        printf("  Estado: %s\n", pcbs[i].state);
+        printf("  %s\n", pcbs[i].state);
         printf("  Quantidade de D1: %d\n", pcbs[i].qttD1);
         printf("  Quantidade de D2: %d\n", pcbs[i].qttD2);
         printf("-------------------------\n");  // Separação visual entre processos
