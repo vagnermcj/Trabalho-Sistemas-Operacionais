@@ -17,6 +17,7 @@ int GLOBAL_DEVICE = -1;
 int GLOBAL_TIMEOUT = -1;
 int GLOBAL_HAS_SYSCALL = -1;
 int GLOBAL_TERMINATED = -1;
+int GLOBAL_FINISHED_SYSCALL = -1;
 
 // Estrutura da fila
 struct queue {
@@ -67,41 +68,11 @@ int main(void) {
     initQueue(&ready_processes, "de Pronto");
     initQueue(&exec_process, "de ativo");
     initQueue(&terminated_process, "de terminado");
-    
-    
-    systemcall = shmget(IPC_PRIVATE, 2*sizeof(char), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
-    if (systemcall == -1) {
-        perror("Erro ao criar memória compartilhada para systemcall");
-        exit(1);
-    }
+    systemcall = shmget (IPC_PRIVATE, 2*sizeof(char), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR); //Shm para as informacoes de Device e Operation
+    ProcessControlBlock = shmget (IPC_PRIVATE, N_PROCESSOS*sizeof(PCB), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
 
-    // Criação de memória compartilhada para o PCB
-    ProcessControlBlock = shmget(IPC_PRIVATE, N_PROCESSOS * sizeof(PCB), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
-    if (ProcessControlBlock == -1) {
-        perror("Erro ao criar memória compartilhada para PCB");
-        exit(1);
-    }
-
-    // Anexando a memória compartilhada do PCB
-    pPCB = (PCB*) shmat(ProcessControlBlock, 0, 0);
-    if (pPCB == (void*) -1) {
-        perror("Erro ao anexar a memória compartilhada do PCB");
-        exit(1);
-    }
-    // Anexando a memória compartilhada systemcall
-    sc = (char*) shmat(systemcall, 0, 0);
-    if (sc == (void*) -1) {
-        perror("Erro ao anexar a memória compartilhada systemcall");
-        exit(1);
-    }
-
-
-
-    printf("SHM Criadas\n");
-    sc[0] = 'x';
-    sc[1] = 'x';
-    printf("SC 1 %c SC2 %c", sc[0], sc[1]);
-
+    sc = (char*)shmat(systemcall,0,0); //Conecta o pai com shm
+    pPCB = (PCB*) shmat (ProcessControlBlock, 0, 0);
      
     pidInterrupter = fork();
     if (pidInterrupter == 0) { //Interrupter
@@ -117,11 +88,13 @@ int main(void) {
             signal(SIGTERM, SignalHandler);  
             signal(SIGTSTP, SignalHandler); 
             signal(SIGIO, SignalHandler);
+            signal(SIGPWR , SignalHandler);
         }
         for (int i = 0; i < N_PROCESSOS; i++) {
             pidProcesses[i] = fork();
             if (pidProcesses[i] == 0) //Filho
             {  
+               
                 processo(sc, pPCB, i);  // Executa a função do processo
                 exit(0);  // Saída do processo filho
             }
@@ -131,13 +104,15 @@ int main(void) {
         
         for(int i =0; i<N_PROCESSOS;i++) //Filhos criados, agora coloca na fila
         {
+            //
             enqueue(&ready_processes, pidProcesses[i]);
+            //
         }
 
         int current = dequeue(&ready_processes); 
         enqueue(&exec_process, current);
-        kill(pidInterrupter, SIGCONT); //Interrupter Ativo
         kill(current, SIGCONT); //Processo Ativo
+        kill(pidInterrupter, SIGCONT); //Interrupter Ativo
         
         printQueue(&ready_processes);
         printQueue(&exec_process);
@@ -150,16 +125,19 @@ int main(void) {
             if(isFull(&terminated_process))
                 break;
 
-            if(GLOBAL_HAS_SYSCALL >= 0)
+            if(GLOBAL_HAS_SYSCALL == 1)
             {
-                while(1)
+
+                printf("tomei syscall to no if\n ");
+                printf("GLOBAL_FINISHED_SYSCALL --> %d\n",GLOBAL_FINISHED_SYSCALL);
+                while(GLOBAL_FINISHED_SYSCALL != 1)
                 {
-                    if(GLOBAL_HAS_SYSCALL == 1)
-                        break;
+
                 }
+
                 int pidsyscall = dequeue(&exec_process); //Tira o processo q fez a syscall da fila
                 //kill(pidsyscall, SIGSTOP); //Para ele
-
+                printf("dx e op antes sla\n");
                 char Dx = sc[0];
                 char Op = sc[1];
                 printf("DEVICE %c / OP %c\n", Dx, Op);
@@ -175,6 +153,7 @@ int main(void) {
                     kill(next_process, SIGCONT); 
                 }
 
+                GLOBAL_FINISHED_SYSCALL = -1;
                 GLOBAL_HAS_SYSCALL = -1;
                 GLOBAL_TIMEOUT = -1;
             }
@@ -235,9 +214,9 @@ int main(void) {
                     GLOBAL_TIMEOUT = -1;
                 }
             }
-
             if(GLOBAL_TIMEOUT != -1 && GLOBAL_HAS_SYSCALL == -1 && !isEmpty(&exec_process)) //Tira por Timeout
             {
+                printf("GLOBAL_HAS_SYSCALL --> %d\n",GLOBAL_HAS_SYSCALL);
                 if (!isEmpty(&exec_process)) {
                     kill(peek(&exec_process), SIGSTOP); 
                     int current_process = dequeue(&exec_process);
@@ -303,12 +282,16 @@ void SignalHandler(int sinal) {
             GLOBAL_TIMEOUT = 0;
             break;
         case SIGTSTP:
-            printf("Syscall\n");
-            GLOBAL_HAS_SYSCALL += 1;
+            printf(" FINISHED Syscall\n");
+            GLOBAL_FINISHED_SYSCALL = 1;
             break;
         case SIGIO:
             printf("Terminated\n");
             GLOBAL_TERMINATED = 1;
+            break;
+        case SIGPWR:
+            printf("START SYSCALL\n");
+            GLOBAL_HAS_SYSCALL = 1;
             break;
     }
 }
@@ -323,43 +306,70 @@ void processo(char* shm, PCB* pcb, int id) {
     pcb[id].PC = PC; 
     pcb[id].qttD1 = 0;
     pcb[id].qttD2 = 0;  
+   
     raise(SIGSTOP);
     srand(getpid());
 
     while (PC < MAX) {
         usleep(500000); //Sleep 500ms
+       
         printf("pc do processo %d mutex ante dos ++ --> %d \n",getpid(),pcb[id].PC);
         pcb[id].PC += 1; 
         printf("pc do processo %d mutex depois dos ++ --> %d \n",getpid(),pcb[id].PC);
+       
         fflush(stdout);
         d = rand();
         f  = (d % 100) + 1;
         printf("d --> %d  f --> %d\n",d,f);
-        if (f < 15) { 
-            kill(getppid(), SIGTSTP);
+        if (f < 5) { 
+            kill(getppid(), SIGPWR);
+           
             printf("SYSCALL PROCESSO %d\n", getpid());
-            if (d % 2) 
+            if (d % 2) {
+                printf("if antes de atribuir valor d/2 dx --> %c\n",Dx);
                 Dx = '1';
-            else 
-                Dx = '2';
+                printf("if depois de atribuir valor d/2 dx --> %c\n",Dx);
 
+            }
+            else {
+                printf("else antes de atribuir valor d/2 dx --> %c\n",Dx);
+                Dx = '2';
+                printf("else depois de atribuir valor d/2 dx --> %c\n",Dx);
+
+            }
             
 
-            if (d % 3 == 1)
+            if (d % 5 == 1)
             {
+                printf("if antes de atribuir valor d/5 dop --> %c\n",Op);
                 Op = 'R';
+                printf("if antes de atribuir valor d/5 dop --> %c\n",Op);
+
             } 
             else if (d % 3 == 1)
             {
+                printf("elseif antes de atribuir valor d/3 dop --> %c\n",Op);
                 Op = 'W';
+                printf("elseif antes de atribuir valor d/3 dop --> %c\n",Op);
             } 
             else
             {
+                printf("elseif antes de atribuir valor d/3 dop --> %c\n",Op);
                 Op = 'X';
+                printf("elseif antes de atribuir valor d/3 dop --> %c\n",Op);
+
             } 
+
+            printf(" shm[0] --> %c, op --> %c\n",  shm[0], Dx );
             shm[0] = Dx;
+            printf(" shm[0.1] --> %c, op --> %c\n", shm[0], Dx );
+
+            printf(" shm[1] --> %c, op --> %c\n",  shm[1], Op );
             shm[1] = Op;
+            printf(" shm[1.1] --> %c, op --> %c\n",  shm[1], Op );
+
             printf("IF dx %c op %c\n", Dx, Op);
+           
             kill(getppid(), SIGTSTP);
             raise(SIGSTOP);
         }
