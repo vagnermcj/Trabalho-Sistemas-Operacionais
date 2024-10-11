@@ -62,11 +62,11 @@ int main(void) {
     int pidProcesses[N_PROCESSOS]; 
 
 
-    initQueue(&blocked_D1, "Blocked_1");
-    initQueue(&blocked_D2, "Blocked_2");
-    initQueue(&ready_processes, "Ready");
-    initQueue(&exec_process, "Active");
-    initQueue(&terminated_process, "Terminated");
+    initQueue(&blocked_D1, "de bloqueado_1");
+    initQueue(&blocked_D2, "de bloqueado_2");
+    initQueue(&ready_processes, "de Pronto");
+    initQueue(&exec_process, "de ativo");
+    initQueue(&terminated_process, "de terminado");
     systemcall = shmget (IPC_PRIVATE, 2*sizeof(char), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR); //Shm para as informacoes de Device e Operation
     ProcessControlBlock = shmget (IPC_PRIVATE, N_PROCESSOS*sizeof(PCB), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
      
@@ -123,18 +123,25 @@ int main(void) {
             if(isFull(&terminated_process))
                 break;
 
-            if(GLOBAL_HAS_SYSCALL == 1)
+            if(GLOBAL_HAS_SYSCALL >= 0)
             {
+                while(1)
+                {
+                    if(GLOBAL_HAS_SYSCALL == 1)
+                        break;
+                }
+                int pidsyscall = dequeue(&exec_process); //Tira o processo q fez a syscall da fila
+                //kill(pidsyscall, SIGSTOP); //Para ele
+
                 char Dx = sc[0];
                 char Op = sc[1];
                 printf("DEVICE %c / OP %c\n", Dx, Op);
-                int pidsyscall = dequeue(&exec_process); //Tira o processo q fez a syscall da fila
-                kill(pidsyscall, SIGSTOP); //Para ele
                 if (Dx == '1') { //Atribui a uma fila de blocked
                     enqueue(&blocked_D1, pidsyscall);
                 } else if (Dx == '2') {
                     enqueue(&blocked_D2, pidsyscall);
                 }
+
                 if (!isEmpty(&ready_processes)) {
                     int next_process = dequeue(&ready_processes);; //Ativa o proximo da fila 
                     enqueue(&exec_process, next_process);
@@ -156,7 +163,6 @@ int main(void) {
                             printf("Processo %d com index %d liberado do dispositivo 1\n", released_process, index);
                             if(pPCB[index].PC >= MAX) //Processo deve terminar
                             {
-                                printf("entrou1\n");
                                 enqueue(&terminated_process, released_process);
                                 kill(released_process, SIGCONT);
                             }
@@ -229,7 +235,7 @@ int main(void) {
                     }
             }
 
-            printf("-----------------------------------------------\n");
+            printf("-------------------- COMECO -----------------------\n");
             printQueue(&ready_processes);
             printf("\n");
             printQueue(&exec_process);
@@ -238,7 +244,7 @@ int main(void) {
             printQueue(&blocked_D2);
             printQueue(&terminated_process);
             printf("\n");
-            printf("-----------------------------------------------\n");
+            printf("--------------------- FIM ----------------------\n");
             sleep(1); // Pausa no loop para evitar consumo excessivo de CPU
         }
     }
@@ -247,6 +253,7 @@ int main(void) {
         wait(NULL);
     }
 
+    kill(pidInterrupter, SIGKILL);
     shmctl(systemcall,IPC_RMID, 0);
     shmctl(ProcessControlBlock,IPC_RMID, 0);
     printf("CAbO PORRA\n");
@@ -270,7 +277,7 @@ void SignalHandler(int sinal) {
             break;
         case SIGTSTP:
             printf("Syscall\n");
-            GLOBAL_HAS_SYSCALL = 1;
+            GLOBAL_HAS_SYSCALL += 1;
             break;
         case SIGIO:
             printf("Terminated\n");
@@ -286,68 +293,57 @@ void processo(char* shm, PCB* pcb, int id) {
     char Op;
     int f;
 
+    pthread_mutex_lock(&mutex);
     pcb[id].PC = PC; 
     pcb[id].qttD1 = 0;
     pcb[id].qttD2 = 0;  
-
+    pthread_mutex_unlock(&mutex);
     raise(SIGSTOP);
-    srand ( time(NULL) );
+    srand(getpid());
 
     while (PC < MAX) {
+        usleep(500000); //Sleep 500ms
+        pthread_mutex_lock(&mutex);
+        printf("pc do processo %d mutex ante dos ++ --> %d \n",getpid(),pcb[id].PC);
         pcb[id].PC += 1; 
-        sleep(0.5);
-        printf("################ PID: %d PC: %d ####################\n", getpid(), PC);
+        printf("pc do processo %d mutex depois dos ++ --> %d \n",getpid(),pcb[id].PC);
+        pthread_mutex_unlock(&mutex);
+        fflush(stdout);
         d = rand();
         f  = (d % 100) + 1;
-        if (f < 50) { 
+        printf("d --> %d  f --> %d\n",d,f);
+        if (f < 5) { 
+            kill(getppid(), SIGTSTP);
+            pthread_mutex_lock(&mutex);
             printf("SYSCALL PROCESSO %d\n", getpid());
             if (d % 2) 
-            {
                 Dx = '1';
-                //pthread_mutex_lock(&mutex);
-                printf("QTTD1 antes %d",1);
-                pcb[id].qttD1 += 1;
-                printf("QTTD1 dps %d", pcb[id].qttD1);
-                //pthread_mutex_unlock(&mutex);
-            }
             else 
-            {
                 Dx = '2';
-                //pthread_mutex_lock(&mutex);
-                printf("QTTD2 %d", 4);
-                pcb[id].qttD2 += 1;
-                printf("QTTD2 %d", pcb[id].qttD2);
-                //pthread_mutex_unlock(&mutex);
 
-            }
             
-            printf("SHM DX %c", shm[0]);
             shm[0] = Dx;
-            printf("SHM DX 2 %c", shm[0]);
 
             if (d % 3 == 1)
             {
-                printf("IF 3\n");
                 Op = 'R';
             } 
             else if (d % 3 == 1)
             {
-                printf("IF 4\n");
                 Op = 'W';
             } 
             else
             {
                 Op = 'X';
-                printf("IF 5\n");
             } 
             shm[1] = Op;
-            printf("IF dx %c op %c?\n", Dx, Op);
-            
-            printf("IF 6\n");
+            printf("IF dx %c op %c\n", Dx, Op);
+            pthread_mutex_unlock(&mutex);
             kill(getppid(), SIGTSTP);
+            raise(SIGSTOP);
         }
-        sleep(0.5);
         PC++;
+        usleep(500000); //Sleep 500ms
     }
 
     printf("Processo %d terminated com PC %d\n", getpid(), pcb[id].PC);
@@ -371,8 +367,13 @@ void InterruptController() {
         else if (random_num <= 0.6) {
             kill(parent_id, SIGUSR2);
         }
-        usleep(1000000); //sleep 500 ms
-        kill(parent_id, SIGTERM);
+        usleep(1000000); //sleep 1 sec
+        if(kill(parent_id, SIGTERM) == 0)
+            printf("\nSINAL do interrupter ENVIADO\n");
+        else{
+            printf("\nSINAL do interrupter nao foi ENVIADO\n");
+            exit(0);
+        }
     }
 }
 
