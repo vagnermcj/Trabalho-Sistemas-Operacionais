@@ -10,9 +10,10 @@
 #include <string.h>
 #include <pthread.h>
 
-#define N_PROCESSOS 3
-#define MAX 3
+#define N_PROCESSOS 5
+#define MAX 20
 
+//Inicialização das FLAGS
 int GLOBAL_DEVICE = -1;
 int GLOBAL_TIMEOUT = -1;
 int GLOBAL_HAS_SYSCALL = -1;
@@ -54,11 +55,14 @@ void printPCBs(PCB pcbs[], int tamanho);
 
 
 int main(void) {
+    //Filas
     Queue blocked_D1;
     Queue blocked_D2;
     Queue ready_processes;
     Queue exec_process;
     Queue terminated_process;
+
+    //SHM
     int ProcessControlBlock;
     PCB *pPCB;
     int systemcall;
@@ -66,7 +70,7 @@ int main(void) {
     int pidInterrupter;
     int pidProcesses[N_PROCESSOS]; 
 
-
+    //Inicializa Filas
     initQueue(&blocked_D1, "de Bloqueado_1");
     initQueue(&blocked_D2, "de Bloqueado_2");
     initQueue(&ready_processes, "de Pronto");
@@ -74,7 +78,7 @@ int main(void) {
     initQueue(&terminated_process, "de Terminado");
     printf("-------------------------------------------\n");
     systemcall = shmget (IPC_PRIVATE, 2*sizeof(char), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR); //Shm para as informacoes de Device e Operation
-    ProcessControlBlock = shmget (IPC_PRIVATE, N_PROCESSOS*sizeof(PCB), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
+    ProcessControlBlock = shmget (IPC_PRIVATE, N_PROCESSOS*sizeof(PCB), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR); //SHM para a PCB
 
     sc = (char*)shmat(systemcall,0,0); //Conecta o pai com shm
     pPCB = (PCB*) shmat (ProcessControlBlock, 0, 0);
@@ -86,7 +90,7 @@ int main(void) {
     } 
     else //KernelSim 
     { 
-        if(pidInterrupter != 0) //Atribui o signal handler ao pai 
+        if(pidInterrupter != 0) //Atribui o signal handler ao Kernel 
         {
             signal(SIGUSR1, SignalHandler);  
             signal(SIGUSR2, SignalHandler);  
@@ -111,6 +115,7 @@ int main(void) {
             printf("\n");
         }
 
+        //Prepara pra começar o KernelSimulator
         int current = dequeue(&ready_processes); 
         enqueue(&exec_process, current);
         printf("\n");
@@ -132,11 +137,12 @@ int main(void) {
         printf("\n");
 
         while (1) {
-            if(isFull(&terminated_process))
+            if(isFull(&terminated_process)) //Se todos processos terminarem, break
                 break;
             
-            if(GLOBAL_STOP_SIMULATOR == 1)
+            if(GLOBAL_STOP_SIMULATOR == 1) //Usuario deu sinal para parada
             {
+                //Para todos os processos
                 kill(pidInterrupter, SIGSTOP);             
                 for (int i = 0; i < N_PROCESSOS; i++)
                 {
@@ -145,26 +151,30 @@ int main(void) {
                 }
                 printPCBs(pPCB, N_PROCESSOS);
                 GLOBAL_STOP_SIMULATOR = 2;
-                while(GLOBAL_STOP_SIMULATOR == 2)
+                while(GLOBAL_STOP_SIMULATOR == 2) //Pseudo SIGSTOP
                 {}
                 sleep(1);
+                //Recomeça todos os processos 
                 GLOBAL_STOP_SIMULATOR = -1;
                 kill(pidInterrupter, SIGCONT);
                 kill(peek(&exec_process), SIGCONT);             
             }
             
 
-            if(GLOBAL_HAS_SYSCALL == 1)
+            if(GLOBAL_HAS_SYSCALL == 1) //Processo inciou uma syscall
             {
-                while(GLOBAL_FINISHED_SYSCALL != 1)
+                while(GLOBAL_FINISHED_SYSCALL != 1) // Espera o processo terminar de solicitar
                 {
                 }
 
                 int pidsyscall = dequeue(&exec_process); //Tira o processo q fez a syscall da fila
+                //Escreve os devices na SHM
                 char Dx = sc[0];
                 char Op = sc[1];
+                
+                //Muda o estado do processo para bloqueado
                 int index = encontrarIndex(pidProcesses,N_PROCESSOS, pidsyscall);
-                char* mensagem = concatena("Estado: Bloqueado", Dx, Op);
+                char* mensagem = concatena("Estado: Bloqueado", Dx, Op); 
                 strcpy(pPCB[index].state, mensagem);
                 free(mensagem);
                 if (Dx == '1') { //Atribui a uma fila de blocked
@@ -173,14 +183,15 @@ int main(void) {
                     enqueue(&blocked_D2, pidsyscall);
                 }
 
-                if (!isEmpty(&ready_processes)) {
+                if (!isEmpty(&ready_processes)) { //Verifica se tem proximo na fila de prontos
                     int next_process = dequeue(&ready_processes);; //Ativa o proximo da fila 
                     int index = encontrarIndex(pidProcesses, N_PROCESSOS, next_process);
-                    strcpy(pPCB[index].state, "Estado: Ativo");
+                    strcpy(pPCB[index].state, "Estado: Ativo"); //Muda o estado para ativo 
                     enqueue(&exec_process, next_process);
                     kill(next_process, SIGCONT); 
                 }
 
+                //Reinicia as FLAGS
                 GLOBAL_FINISHED_SYSCALL = -1;
                 GLOBAL_HAS_SYSCALL = -1;
                 GLOBAL_TIMEOUT = -1;
@@ -188,11 +199,11 @@ int main(void) {
           
             
 
-            if (GLOBAL_DEVICE != -1) { //Tratamento interrupcao
+            if (GLOBAL_DEVICE != -1) { //Tratamento interrupcao IRQ1 e IRQ2
                 switch (GLOBAL_DEVICE) {
                     case 1: 
-                        if (!isEmpty(&blocked_D1)) {
-                            int released_process = dequeue(&blocked_D1);
+                        if (!isEmpty(&blocked_D1)) { //Device 1
+                            int released_process = dequeue(&blocked_D1); //Tira ele da fila
                             int index = encontrarIndex(pidProcesses,N_PROCESSOS, released_process);
                             if(pPCB[index].PC >= MAX) //Processo deve terminar
                             {
@@ -200,7 +211,7 @@ int main(void) {
                                 enqueue(&terminated_process, released_process);
                                 kill(released_process, SIGCONT);
                             }
-                            else
+                            else //Processo volta pra ready
                             {
                                 strcpy(pPCB[index].state, "Estado: Pronto");
                                 enqueue(&ready_processes, released_process);                           
@@ -208,7 +219,7 @@ int main(void) {
                         }
                         break;
                     case 2: 
-                        if (!isEmpty(&blocked_D2)) {
+                        if (!isEmpty(&blocked_D2)) { //Device 2
                             int released_process = dequeue(&blocked_D2);
                             int index = encontrarIndex(pidProcesses,N_PROCESSOS, released_process);
                             if(pPCB[index].PC >= MAX) //Processo deve terminar
@@ -217,7 +228,7 @@ int main(void) {
                                 enqueue(&terminated_process, released_process);
                                 kill(released_process, SIGCONT);
                             }
-                            else
+                            else //Processo volta pra ready
                             {
                                 strcpy(pPCB[index].state, "Estado: Pronto");
                                 enqueue(&ready_processes, released_process);
@@ -225,42 +236,46 @@ int main(void) {
                         }
                         break;    
                 }
+
+                //Reinicia FLAGS
                 GLOBAL_DEVICE = -1;
                 GLOBAL_TIMEOUT = -1;
             }
 
-            if(!isEmpty(&exec_process))
+            if(!isEmpty(&exec_process)) //Se tem alguem na fila de ativos
             {
                 int index = encontrarIndex(pidProcesses,N_PROCESSOS, peek(&exec_process));
-                if(pPCB[index].PC >= MAX && GLOBAL_HAS_SYSCALL == -1) //Terminated se PC > MAX
+                if(pPCB[index].PC >= MAX && GLOBAL_HAS_SYSCALL == -1) //Termina o programa se PC > MAX
                 {
-                    int terminated = dequeue(&exec_process);
+                    int terminated = dequeue(&exec_process); //Tira da fila de ativos
                     int index = encontrarIndex(pidProcesses, N_PROCESSOS, terminated);
-                    strcpy(pPCB[index].state, "Estado: Terminado");
+                    strcpy(pPCB[index].state, "Estado: Terminado"); //Muda seu Estado
                     enqueue(&terminated_process, terminated);
                     printQueue(&terminated_process);
                     printQueue(&exec_process);
-                    if(!isEmpty(&ready_processes))
+                    if(!isEmpty(&ready_processes)) // Se tem processo em ready, passa pra ativo
                     {
-                        int next = dequeue(&ready_processes);
+                        int next = dequeue(&ready_processes); 
                         int index = encontrarIndex(pidProcesses, N_PROCESSOS, next);
                         strcpy(pPCB[index].state, "Estado: Ativo");
                         enqueue(&exec_process, next);
                     }
+
+                    //Reinicia as FLAGS
                     GLOBAL_TERMINATED = -1;
                     GLOBAL_TIMEOUT = -1;
                 }
             }
-            if(GLOBAL_TIMEOUT != -1 && GLOBAL_HAS_SYSCALL == -1 && !isEmpty(&exec_process)) //Tira por Timeout
+            if(GLOBAL_TIMEOUT != -1 && GLOBAL_HAS_SYSCALL == -1 && !isEmpty(&exec_process)) //Tira o programa de ativos quando houver timeout
             {
-                if (!isEmpty(&exec_process)) {
-                    kill(peek(&exec_process), SIGSTOP); 
+                if (!isEmpty(&exec_process)) { 
+                    kill(peek(&exec_process), SIGSTOP); //Tira o processo de ativos 
                     int current_process = dequeue(&exec_process);
                     int index = encontrarIndex(pidProcesses, N_PROCESSOS, current_process);
-                    strcpy(pPCB[index].state, "Estado: Pronto");
+                    strcpy(pPCB[index].state, "Estado: Pronto"); // Muda seu estado para pronto
                     enqueue(&ready_processes, current_process);
                     int next_process = peek(&ready_processes);
-                    if (next_process != -1) {
+                    if (next_process != -1) { //Passa o proximo da fila prontos para ativo
                         dequeue(&ready_processes);
                         int index = encontrarIndex(pidProcesses, N_PROCESSOS, next_process);
                         strcpy(pPCB[index].state, "Estado: Ativo");
@@ -268,12 +283,14 @@ int main(void) {
                         kill(next_process, SIGCONT); 
                     }
                 }
+
+                //Reinicia FLAG
                 GLOBAL_TIMEOUT = -1;
             }
 
-            if(isEmpty(&exec_process) && !isEmpty(&ready_processes))
+            if(isEmpty(&exec_process) && !isEmpty(&ready_processes)) //Se não tem processos ativos mas algum esta em pronto
             {
-                int next_process = peek(&ready_processes);
+                int next_process = peek(&ready_processes); //Tira de Pronto e passa pra ativo
                     if (next_process != -1) {
                         dequeue(&ready_processes);
                         int index = encontrarIndex(pidProcesses, N_PROCESSOS, next_process);
@@ -299,11 +316,11 @@ int main(void) {
         }
     }
 
-    for (int i = 0; i < N_PROCESSOS; i++) {
+    for (int i = 0; i < N_PROCESSOS; i++) { //Espera os filhos terminar
         wait(NULL);
     }
 
-    kill(pidInterrupter, SIGKILL);
+    kill(pidInterrupter, SIGKILL); //Termina o Interrupter
      printf("\n\n\n-----------------------------------------------\n\n\n");
     printf("Finalizando kernel Sim......\n\n");
     printPCBs(pPCB, N_PROCESSOS);
@@ -313,7 +330,7 @@ int main(void) {
     return 0;
 }
 
-// Funções de controle de interrupção e syscalls
+// Função de Controle dos Sinais
 void SignalHandler(int sinal) {
     switch (sinal) {
         case SIGUSR1:
@@ -353,26 +370,26 @@ void processo(char* shm, PCB* pcb, int id) {
     char Op;
     int f;
 
-    
+    //Inicializa a PCB
     pcb[id].PID = getpid(); 
     pcb[id].PC = PC; 
     strcpy(pcb[id].state, "Estado: Pronto");
     pcb[id].qttD1 = 0;
     pcb[id].qttD2 = 0;  
    
-    raise(SIGSTOP);
+    raise(SIGSTOP); //Espera permissão do kernel para poder começar
     srand(getpid());
 
     while (PC < MAX) {
         usleep(500000); //Sleep 500ms
        
-        pcb[id].PC += 1; 
+        pcb[id].PC += 1; //Incrementa PC na PCB
        
         fflush(stdout);
         d = rand();
         f  = (d % 100) + 1;
-        if (f < 15) { 
-            kill(getppid(), SIGPWR);
+        if (f < 15) { //Condição da SYSCALL
+            kill(getppid(), SIGPWR); // Informa ao kernel que começou a preparar uma SYSCALL
             if (d % 2) {
                 Dx = '1';
                 pcb[id].qttD1 += 1;
@@ -389,10 +406,10 @@ void processo(char* shm, PCB* pcb, int id) {
             else
                 Op = 'X';
 
-
+            //Passa o Device e a Operação para SHM
             shm[0] = Dx;
             shm[1] = Op;       
-            kill(getppid(), SIGTSTP);
+            kill(getppid(), SIGTSTP); //Informa o Kernel que terminou a syscall
             raise(SIGSTOP);
         }
         PC++;
@@ -401,26 +418,27 @@ void processo(char* shm, PCB* pcb, int id) {
 
     printf("Processo %d terminou com PC %d\n", getpid(), pcb[id].PC);
 
+    //Dettach das SHM
     shmdt(pcb);
     shmdt(shm);
-    kill(getppid(), SIGIO);
+    kill(getppid(), SIGIO); //Informa ao kernel que o processo terminou
 }
 
 void InterruptController() {
-    raise(SIGSTOP);
+    raise(SIGSTOP); //Espera permissão do kernel para executar
     int parent_id = getppid();
     srand(time(NULL));   
     while (1) {
         double random_num = (((double) rand()) / RAND_MAX);
         
         if ( random_num <= 0.3) {
-            kill(parent_id, SIGUSR1);
+            kill(parent_id, SIGUSR1); //Libera Device 1 IRQ1
         }
         else if (random_num <= 0.6) {
-            kill(parent_id, SIGUSR2);
+            kill(parent_id, SIGUSR2); //Libera device 2 IRQ2
         }
         usleep(1000000); //sleep 1 sec
-        if(kill(parent_id, SIGTERM) != 0)
+        if(kill(parent_id, SIGTERM) != 0) //Libera sinal IRQO
         {
             printf("\nSINAL do interrupter nao foi ENVIADO\n");
             exit(0);
@@ -501,7 +519,7 @@ int peek( Queue* q) {
     return q->items[q->primeiro];
 }
 
-int encontrarIndex(int vetor[], int tamanho, int valor) {
+int encontrarIndex(int vetor[], int tamanho, int valor) { //Encontra o index do PID passado em valor na PCB[]
     for (int i = 0; i < tamanho; i++) {
         if (vetor[i] == valor) {
             return i;  // Retorna o índice do valor encontrado
@@ -529,7 +547,7 @@ char* concatena(char* mensagem, char d1, char op) {
     return resultado;
 }
 
-void printPCBs(PCB pcbs[], int tamanho) {
+void printPCBs(PCB pcbs[], int tamanho) { //Exibe o que está na PCB
     for (int i = 0; i < tamanho; i++) {
         printf("Processo %d: %d\n", i + 1, pcbs[i].PID);
         printf("  Program Counter (PC): %d\n", pcbs[i].PC);
