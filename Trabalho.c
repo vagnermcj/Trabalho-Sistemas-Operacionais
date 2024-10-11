@@ -17,7 +17,6 @@ int GLOBAL_DEVICE = -1;
 int GLOBAL_TIMEOUT = -1;
 int GLOBAL_HAS_SYSCALL = -1;
 int GLOBAL_TERMINATED = -1;
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Estrutura da fila
 struct queue {
@@ -57,7 +56,8 @@ int main(void) {
     Queue terminated_process;
     int ProcessControlBlock;
     PCB *pPCB;
-    char systemcall, *sc;
+    int systemcall;
+    char *sc;
     int pidInterrupter;
     int pidProcesses[N_PROCESSOS]; 
 
@@ -67,8 +67,41 @@ int main(void) {
     initQueue(&ready_processes, "de Pronto");
     initQueue(&exec_process, "de ativo");
     initQueue(&terminated_process, "de terminado");
-    systemcall = shmget (IPC_PRIVATE, 2*sizeof(char), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR); //Shm para as informacoes de Device e Operation
-    ProcessControlBlock = shmget (IPC_PRIVATE, N_PROCESSOS*sizeof(PCB), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
+    
+    
+    systemcall = shmget(IPC_PRIVATE, 2*sizeof(char), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
+    if (systemcall == -1) {
+        perror("Erro ao criar memória compartilhada para systemcall");
+        exit(1);
+    }
+
+    // Criação de memória compartilhada para o PCB
+    ProcessControlBlock = shmget(IPC_PRIVATE, N_PROCESSOS * sizeof(PCB), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);
+    if (ProcessControlBlock == -1) {
+        perror("Erro ao criar memória compartilhada para PCB");
+        exit(1);
+    }
+
+    // Anexando a memória compartilhada do PCB
+    pPCB = (PCB*) shmat(ProcessControlBlock, 0, 0);
+    if (pPCB == (void*) -1) {
+        perror("Erro ao anexar a memória compartilhada do PCB");
+        exit(1);
+    }
+    // Anexando a memória compartilhada systemcall
+    sc = (char*) shmat(systemcall, 0, 0);
+    if (sc == (void*) -1) {
+        perror("Erro ao anexar a memória compartilhada systemcall");
+        exit(1);
+    }
+
+
+
+    printf("SHM Criadas\n");
+    sc[0] = 'x';
+    sc[1] = 'x';
+    printf("SC 1 %c SC2 %c", sc[0], sc[1]);
+
      
     pidInterrupter = fork();
     if (pidInterrupter == 0) { //Interrupter
@@ -89,28 +122,22 @@ int main(void) {
             pidProcesses[i] = fork();
             if (pidProcesses[i] == 0) //Filho
             {  
-                pPCB = (PCB*) shmat (ProcessControlBlock, 0, 0);
-                sc = (char*)shmat(systemcall,0,0); //Conecta os filhos com shm
                 processo(sc, pPCB, i);  // Executa a função do processo
                 exit(0);  // Saída do processo filho
             }
         }
 
 
-        sc = (char*)shmat(systemcall,0,0); //Conecta o pai com shm
-        pPCB = (PCB*) shmat (ProcessControlBlock, 0, 0);
         
         for(int i =0; i<N_PROCESSOS;i++) //Filhos criados, agora coloca na fila
         {
-            pthread_mutex_unlock(&mutex);
             enqueue(&ready_processes, pidProcesses[i]);
-            pthread_mutex_unlock(&mutex);
         }
 
         int current = dequeue(&ready_processes); 
         enqueue(&exec_process, current);
-        kill(current, SIGCONT); //Processo Ativo
         kill(pidInterrupter, SIGCONT); //Interrupter Ativo
+        kill(current, SIGCONT); //Processo Ativo
         
         printQueue(&ready_processes);
         printQueue(&exec_process);
@@ -293,28 +320,23 @@ void processo(char* shm, PCB* pcb, int id) {
     char Op;
     int f;
 
-    pthread_mutex_lock(&mutex);
     pcb[id].PC = PC; 
     pcb[id].qttD1 = 0;
     pcb[id].qttD2 = 0;  
-    pthread_mutex_unlock(&mutex);
     raise(SIGSTOP);
     srand(getpid());
 
     while (PC < MAX) {
         usleep(500000); //Sleep 500ms
-        pthread_mutex_lock(&mutex);
         printf("pc do processo %d mutex ante dos ++ --> %d \n",getpid(),pcb[id].PC);
         pcb[id].PC += 1; 
         printf("pc do processo %d mutex depois dos ++ --> %d \n",getpid(),pcb[id].PC);
-        pthread_mutex_unlock(&mutex);
         fflush(stdout);
         d = rand();
         f  = (d % 100) + 1;
         printf("d --> %d  f --> %d\n",d,f);
-        if (f < 5) { 
+        if (f < 15) { 
             kill(getppid(), SIGTSTP);
-            pthread_mutex_lock(&mutex);
             printf("SYSCALL PROCESSO %d\n", getpid());
             if (d % 2) 
                 Dx = '1';
@@ -322,7 +344,6 @@ void processo(char* shm, PCB* pcb, int id) {
                 Dx = '2';
 
             
-            shm[0] = Dx;
 
             if (d % 3 == 1)
             {
@@ -336,9 +357,9 @@ void processo(char* shm, PCB* pcb, int id) {
             {
                 Op = 'X';
             } 
+            shm[0] = Dx;
             shm[1] = Op;
             printf("IF dx %c op %c\n", Dx, Op);
-            pthread_mutex_unlock(&mutex);
             kill(getppid(), SIGTSTP);
             raise(SIGSTOP);
         }
