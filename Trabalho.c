@@ -18,6 +18,7 @@ int GLOBAL_TIMEOUT = -1;
 int GLOBAL_HAS_SYSCALL = -1;
 int GLOBAL_TERMINATED = -1;
 int GLOBAL_FINISHED_SYSCALL = -1;
+int GLOBAL_STOP_SIMULATOR = -1;
 
 // Estrutura da fila
 struct queue {
@@ -28,6 +29,7 @@ struct queue {
 
 //Estrutura de PCB
 struct pcb {
+    int PID;
     int PC; 
     char state[200]; //3 Estados Executing, Blocked DX Op, Terminated
     int qttD1;
@@ -90,7 +92,8 @@ int main(void) {
             signal(SIGTERM, SignalHandler);  
             signal(SIGTSTP, SignalHandler); 
             signal(SIGIO, SignalHandler);
-            signal(SIGPWR , SignalHandler);
+            signal(SIGPWR , SignalHandler);    
+            signal(SIGQUIT , SignalHandler);
         }
         for (int i = 0; i < N_PROCESSOS; i++) {
             pidProcesses[i] = fork();
@@ -102,8 +105,8 @@ int main(void) {
             }
         }
 
+        printf("------------- PID SIMULATOR: %d -------------\n", getpid());
 
-        
         for(int i =0; i<N_PROCESSOS;i++) //Filhos criados, agora coloca na fila
         {
             //
@@ -126,6 +129,26 @@ int main(void) {
         while (1) {
             if(isFull(&terminated_process))
                 break;
+            
+            if(GLOBAL_STOP_SIMULATOR == 1)
+            {
+                printf("VAI SER PARADO\n");
+                kill(pidInterrupter, SIGSTOP);             
+                for (int i = 0; i < N_PROCESSOS; i++)
+                {
+                    kill(pidProcesses[i], SIGSTOP);
+                    
+                }
+                printPCBs(pPCB, N_PROCESSOS);
+                GLOBAL_STOP_SIMULATOR = 2;
+                while(GLOBAL_STOP_SIMULATOR == 2)
+                {}
+                sleep(1);
+                GLOBAL_STOP_SIMULATOR = -1;
+                kill(pidInterrupter, SIGCONT);
+                kill(peek(&exec_process), SIGCONT);             
+            }
+            
 
             if(GLOBAL_HAS_SYSCALL == 1)
             {
@@ -262,7 +285,7 @@ int main(void) {
                     }
             }
 
-            printf("-------------------- COMECO -----------------------\n");
+            printf("-------------------- COMECO %d -----------------------\n", getpid());
             printQueue(&ready_processes);
             printf("\n");
             printQueue(&exec_process);
@@ -281,11 +304,10 @@ int main(void) {
     }
 
     kill(pidInterrupter, SIGKILL);
+    printf("Finalizando kernel Sim......\n");
     printPCBs(pPCB, N_PROCESSOS);
     shmctl(systemcall,IPC_RMID, 0);
     shmctl(ProcessControlBlock,IPC_RMID, 0);
-
-    printf("CAbO PORRA\n");
     return 0;
 }
 
@@ -316,6 +338,9 @@ void SignalHandler(int sinal) {
             printf("START SYSCALL\n");
             GLOBAL_HAS_SYSCALL = 1;
             break;
+        case SIGQUIT:
+            GLOBAL_STOP_SIMULATOR = 1;
+            break;
     }
 }
 
@@ -326,6 +351,8 @@ void processo(char* shm, PCB* pcb, int id) {
     char Op;
     int f;
 
+    
+    pcb[id].PID = getpid(); 
     pcb[id].PC = PC; 
     strcpy(pcb[id].state, "Estado: Pronto");
     pcb[id].qttD1 = 0;
@@ -506,7 +533,7 @@ char* concatena(char* mensagem, char d1, char op) {
 
 void printPCBs(PCB pcbs[], int tamanho) {
     for (int i = 0; i < tamanho; i++) {
-        printf("Processo %d:\n", i + 1);
+        printf("Processo %d: %d\n", i + 1, pcbs[i].PID);
         printf("  Program Counter (PC): %d\n", pcbs[i].PC);
         printf("  Estado: %s\n", pcbs[i].state);
         printf("  Quantidade de D1: %d\n", pcbs[i].qttD1);
