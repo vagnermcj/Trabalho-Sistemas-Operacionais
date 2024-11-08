@@ -87,8 +87,11 @@ int main(int argc, char *argv[]){
                 int index = nova_pagina[0];
                 int operacao = nova_pagina[1];
                 int currentProcess = nova_pagina[2];
-                Pagina* currentPage = &tabelas[currentProcess].paginas[index];
+                Pagina* currentPage = (Pagina*)malloc(sizeof(Pagina));
+                currentPage = &(tabelas[currentProcess].paginas[index]);
+                //printf("informacoes current page: %d %d\n",currentProcess, index);
                 int pagefault = isPageFault(&memoria_ram,currentPage);
+                //printf("Pagefault index: %d\n", pagefault);
                 if(pagefault == -2)
                 {
                     printf("Faz nada\n");
@@ -99,8 +102,9 @@ int main(int argc, char *argv[]){
                 }
                 else
                 {
-                    printf("Coloca na RAM\n");
+                    memoria_ram.paginas[pagefault] = currentPage;
                 }     
+                GLOBAL_NEW_PAGE = -1;
                 kill(ProcessPid, SIGCONT);
             }
         }
@@ -174,10 +178,6 @@ void TodosProcessos(int *tabela_paginacao, int num_rodadas){
                 tabela_paginacao[2] = i;
                 kill(getppid(), SIGUSR1);
                 raise(SIGSTOP);
-                
-                // Exemplo de saída para visualização (pode ser removido)
-                printf("Arquivo %d: Numero = %d, Operacao = %c\n", i + 1, numero, operacao);
-                printf("Escrito na SHM: [%d, %d]\n", tabela_paginacao[0], tabela_paginacao[1]);
             } else {
                 // Volta ao início do arquivo se chegar ao final
                 rewind(arquivos[i]);
