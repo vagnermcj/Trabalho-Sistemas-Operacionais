@@ -19,14 +19,15 @@
 int GLOBAL_NEW_PAGE = -1;
 
 typedef struct {
-    int presente;
+    int valid;
+    int referenciado;
     int modificado;
     int endereco_virtual_na_ram;
-    int myProcess;
+    int processo;
 } Pagina;
 
 typedef struct {
-    Pagina paginas[NUM_FRAMES_TABEL];  
+    Pagina* paginas[NUM_FRAMES_TABEL];  
 } TabelaPaginacao;
 
 typedef struct {
@@ -152,58 +153,14 @@ int main(int argc, char *argv[]){
     return 0;
 }
 
-void print_ram(RAM *ram) {
-    printf("\nEstado da Memória RAM:\n");
-    printf("Posição | Presente | Modificado | Processo \n");
-    printf("--------------------------------------------------------\n");
-    for (int i = 0; i < NUM_FRAMES_RAM; i++) {
-        if (ram->paginas[i] == NULL) {
-            printf("%7d |   Vazia   |     ---     |        ---\n", i);
-        } else {
-            Pagina *pagina = ram->paginas[i];
-            printf("%7d |     %d     |     %d       |        %d\n", 
-                   i, 
-                   pagina->presente, 
-                   pagina->modificado, 
-                   pagina->myProcess);
-        }
-    }
-    printf("\n");
-}
 
-
-
-int isPageFault(RAM *vetor, Pagina *elemento) {
-    for (int i = 0; i < NUM_FRAMES_RAM; i++) {
-        if (vetor->paginas[i] == elemento) {
-            return -2;
-        }
-        else if (vetor->paginas[i] == NULL) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-
-void SignalHandler(int n)
+void subs_NRU(RAM* ram,TabelaPaginacao tabelas,int currentProcess,Pagina* novaPagina)
 {
-    switch (n)
-    {
-        case SIGUSR1:
-            GLOBAL_NEW_PAGE = 1;
-            break;
-        case SIGUSR2: 
-            GLOBAL_NEW_PAGE = 2;
-            break;
-        case SIGTERM: 
-            GLOBAL_NEW_PAGE = 3;
-            break;
-        case SIGTSTP:
-            GLOBAL_NEW_PAGE = 4;
-            break;
-    }
+
 }
+
+
+
 
 
 void TodosProcessos(int *shm_P1,int *shm_P2,int *shm_P3,int *shm_P4,int num_rodadas){
@@ -281,11 +238,47 @@ void TodosProcessos(int *shm_P1,int *shm_P2,int *shm_P3,int *shm_P4,int num_roda
     }
 }
 
+
+
+#pragma region 
+
+int isPageFault(RAM *vetor, Pagina *elemento) {
+    for (int i = 0; i < NUM_FRAMES_RAM; i++) {
+        if (vetor->paginas[i] == elemento) {
+            return -2;
+        }
+        else if (vetor->paginas[i] == NULL) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void SignalHandler(int n)
+{
+    switch (n)
+    {
+        case SIGUSR1:
+            GLOBAL_NEW_PAGE = 1;
+            break;
+        case SIGUSR2: 
+            GLOBAL_NEW_PAGE = 2;
+            break;
+        case SIGTERM: 
+            GLOBAL_NEW_PAGE = 3;
+            break;
+        case SIGTSTP:
+            GLOBAL_NEW_PAGE = 4;
+            break;
+    }
+}
+
 void inicializar_tabela(TabelaPaginacao *tabela) {
     for (int i = 0; i < NUM_FRAMES_TABEL; i++) {
-        tabela->paginas[i].presente = -1;
-        tabela->paginas[i].modificado = -1;
-        tabela->paginas[i].endereco_virtual_na_ram = -1;
+        tabela->paginas[i]->valid = -1;
+        tabela->paginas[i]->modificado = -1;
+        tabela->paginas[i]->referenciado = -1;
+        tabela->paginas[i]->endereco_virtual_na_ram = -1;
     }
 }
 
@@ -296,20 +289,23 @@ void inicializar_ram(RAM *ram) {
 }
 
 
-//alterar ta so printando ainda
-void call_substitution_algorithm(char* n){
-    if (strcmp(n, "NRU") == 0) {
-        printf("Not Recently Used (NRU)\n");
-    } else if (strcmp(n, "2nCH") == 0) {
-        printf("Segunda Chance\n");
-    } else if (strcmp(n, "LRU") == 0) {
-        printf("LRU/Aging\n");
-    } else if (strcmp(n, "WS") == 0) {
-        printf("Working Set(k)\n");
-    } else {
-        printf("nenhum\n");
+
+void print_ram(RAM *ram) {
+    printf("\nEstado da Memória RAM:\n");
+    printf("Posição | Presente | Modificado | Processo \n");
+    printf("--------------------------------------------------------\n");
+    for (int i = 0; i < NUM_FRAMES_RAM; i++) {
+        if (ram->paginas[i] == NULL) {
+            printf("%7d |   Vazia   |     ---     |        ---\n", i);
+        } else {
+            Pagina *pagina = ram->paginas[i];
+            printf("%7d |     %d     |     %d       |        %d\n", 
+                   i, 
+                   pagina->presente, 
+                   pagina->modificado, 
+                   pagina->myProcess);
+        }
     }
-
+    printf("\n");
 }
-
-
+#pragma endregion
