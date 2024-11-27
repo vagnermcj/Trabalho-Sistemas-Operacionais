@@ -54,6 +54,7 @@ void reset_referenciado(TabelaPaginacao *tabela);
 int main(int argc, char *argv[]){
     int ProcessPid;
     int num_rodadas_cmd; 
+    int total_pagefaults = 0;
     int shm_P1, shm_P2, shm_P3, shm_P4;
     int *nova_pagina_P1, *nova_pagina_P2,*nova_pagina_P3,*nova_pagina_P4;
     if (argc < 3) {  // Verifica se foi passado pelo menos um argumento além do nome do programa
@@ -140,6 +141,8 @@ int main(int argc, char *argv[]){
                 }
                 else if(pagefault == -1) // Pagina nao se encontra na RAM, tem q substituir
                 {
+                    total_pagefaults++;
+
                     if(strcmp(algoritmo_cmd,"NRU") == 0)
                     {
                         subs_NRU(&memoria_ram,tabelas,currentProcess,currentPage,operacao);
@@ -159,6 +162,8 @@ int main(int argc, char *argv[]){
                 }
                 else //Existe espaco vazio na RAM para alocar a Pagina
                 {
+                    total_pagefaults++;
+
                     memoria_ram.paginas[pagefault] = currentPage;
                     currentPage->ramIndex = pagefault;
                     currentPage->valido = 1;
@@ -181,6 +186,7 @@ int main(int argc, char *argv[]){
         }
 
         print_tabelas_paginacao(tabelas);
+        printf("================ PAGEFAULTS: %d ================\n", total_pagefaults);
         //free, shmdt e shmctl
     }
 
@@ -288,7 +294,7 @@ void subs_LRU_Aging(RAM *ram, Pagina *novaPagina, int currentProcess, int operac
 
         // Simula gravação em disco se a página foi modificada
         if (pagina_para_substituir->modificado) {
-            printf("Página %d do processo %d modificada. Salvando no disco...\n",
+            printf("Página suja substituída. Gravando no swap: Página %d do processo %d\n\n",
                    pagina_para_substituir->tabelaIndex, pagina_para_substituir->processo + 1);
         }
 
@@ -393,6 +399,7 @@ void TodosProcessos(int *shm_P1,int *shm_P2,int *shm_P3,int *shm_P4,int num_roda
     }
     kill(getppid(),SIGPWR);
 }
+
 
 int isPageFault(RAM *vetor, Pagina *elemento) {
     for (int i = 0; i < NUM_FRAMES_RAM; i++) {
