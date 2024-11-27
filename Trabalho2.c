@@ -28,6 +28,12 @@ typedef struct {
     unsigned int contador; // Campo para o Aging
 } Pagina;
 
+// Estrutura da fila
+struct queue {
+    char* nome;
+    Pagina *paginas[NUM_FRAMES_RAM];
+    int primeiro, ultimo;
+};typedef struct queue Queue;
 
 typedef struct {
     Pagina* paginas[NUM_FRAMES_TABEL];  
@@ -40,6 +46,7 @@ typedef struct {
 void print_tabelas_paginacao(TabelaPaginacao tabelas[]);
 void print_ram(RAM *ram);
 void subs_NRU(RAM *ram, TabelaPaginacao *tabelas, int currentProcess, Pagina *novaPagina, int operacao);
+void subs_2nd_chance(Queue *q, RAM *ram, Pagina *novaPagina, int operacao);
 void inicializar_tabela(TabelaPaginacao *tabela, int processo);
 void inicializar_ram(RAM *ram);
 void call_substitution_algorithm(char *n);
@@ -49,6 +56,11 @@ int isPageFault(RAM *vetor, Pagina *elemento);
 void subs_LRU_Aging(RAM *ram, Pagina *novaPagina, int currentProcess, int operacao,TabelaPaginacao * tabelas);
 void atualizar_contadores(RAM *ram);
 void reset_referenciado(TabelaPaginacao *tabela);
+void init_queue(Queue *q, const char *nome);
+int is_queue_empty(Queue *q);
+void enqueue(Queue *q, Pagina *pagina);
+Pagina* dequeue(Queue *q);
+Pagina* peek(Queue *q);
 
 
 int main(int argc, char *argv[]){
@@ -57,6 +69,28 @@ int main(int argc, char *argv[]){
     int total_pagefaults = 0;
     int shm_P1, shm_P2, shm_P3, shm_P4;
     int *nova_pagina_P1, *nova_pagina_P2,*nova_pagina_P3,*nova_pagina_P4;
+    Queue filas[4];
+    Queue fila_P1;
+    Queue fila_P2;
+    Queue fila_P3;
+    Queue fila_P4;
+
+
+    init_queue(&fila_P1,"Fila P1");
+    init_queue(&fila_P2,"Fila P2");
+    init_queue(&fila_P3,"Fila P3");
+    init_queue(&fila_P4,"Fila P4");
+
+    filas[0] = fila_P1;
+    filas[1] = fila_P2;
+    filas[2] = fila_P3;
+    filas[3] = fila_P4;
+
+
+    
+    
+
+
     if (argc < 3) {  // Verifica se foi passado pelo menos um argumento além do nome do programa
         printf("Erro: Passe Qual Algoritimo Usar (NRU/ 2nCH/ LRU/ WS) e o Numero de rodadas.\n");
         return 1;
@@ -133,7 +167,7 @@ int main(int argc, char *argv[]){
                 int pagefault = isPageFault(&memoria_ram,currentPage);
                 if(pagefault == -2) // A pagina ja esta na RAM
                 {
-                    if(strcmp(algoritmo_cmd,"NRU") == 0 || strcmp(algoritmo_cmd,"LRU"))
+                    if(strcmp(algoritmo_cmd,"NRU") == 0 || strcmp(algoritmo_cmd,"LRU") || strcmp(algoritmo_cmd,"2nCH"))
                     {
                         currentPage->modificado = operacao;
                         currentPage->referenciado = 1;
@@ -142,6 +176,7 @@ int main(int argc, char *argv[]){
                 else if(pagefault == -1) // Pagina nao se encontra na RAM, tem q substituir
                 {
                     total_pagefaults++;
+                    printf("Pagefault do %d com processo %d\n", index,currentProcess+1);
 
                     if(strcmp(algoritmo_cmd,"NRU") == 0)
                     {
@@ -153,7 +188,7 @@ int main(int argc, char *argv[]){
                     }
                     else if(strcmp(algoritmo_cmd, "2nCH") == 0)
                     {
-
+                        subs_2nd_chance(&filas[currentProcess],&memoria_ram,currentPage,operacao);
                     }
                     else if(strcmp(algoritmo_cmd, "WS") == 0)
                     {
@@ -169,10 +204,17 @@ int main(int argc, char *argv[]){
                     currentPage->valido = 1;
                     currentPage->processo = currentProcess;
 
-                    if(strcmp(algoritmo_cmd,"NRU") == 0 || strcmp(algoritmo_cmd,"LRU"))
+                    if(strcmp(algoritmo_cmd,"NRU") == 0 || strcmp(algoritmo_cmd,"LRU") == 0)
                     {
                         currentPage->modificado = operacao;
                         currentPage->referenciado = 1;
+                    }
+
+                    if(strcmp(algoritmo_cmd,"2nCH") == 0)
+                    {
+                        currentPage->modificado = operacao;
+                        currentPage->referenciado = 1;
+                        enqueue(&filas[currentProcess],currentPage);
                     }
                 }   
                 GLOBAL_NEW_PAGE = -1;
@@ -272,6 +314,7 @@ void subs_NRU(RAM *ram, TabelaPaginacao *tabelas, int currentProcess, Pagina *no
         printf("Erro: Não há páginas válidas para substituir no processo %d\n", currentProcess+1);
     }
 }
+
 void subs_LRU_Aging(RAM *ram, Pagina *novaPagina, int currentProcess, int operacao,TabelaPaginacao * tabelas) {
     int menor_valor = -1; 
     int frame_para_substituir = -1;
@@ -314,6 +357,40 @@ void subs_LRU_Aging(RAM *ram, Pagina *novaPagina, int currentProcess, int operac
 
         printf("Página %d alocada no quadro %d para o processo %d\n",
                novaPagina->tabelaIndex, frame_para_substituir, currentProcess + 1);
+    }
+}
+
+void subs_2nd_chance(Queue *q, RAM *ram, Pagina *novaPagina, int operacao) {
+    while (1) {
+        Pagina *pagina_para_substituir = peek(q); // Pega a página no início da fila
+        if (pagina_para_substituir->referenciado == 0) {
+            // Substituir a página
+            printf("Página substituída: Página %d do processo %d\n", 
+                   pagina_para_substituir->tabelaIndex, pagina_para_substituir->processo + 1);
+
+            // Atualiza a RAM e tabela de paginação
+            ram->paginas[pagina_para_substituir->ramIndex] = novaPagina;
+            novaPagina->ramIndex = pagina_para_substituir->ramIndex;
+            novaPagina->valido = 1;
+            novaPagina->referenciado = 1;
+            novaPagina->modificado = operacao;
+
+            pagina_para_substituir->valido = 0;
+            pagina_para_substituir->ramIndex = -1;
+            pagina_para_substituir->referenciado = 0;
+            pagina_para_substituir->modificado = 0;
+
+
+            dequeue(q); // Remove a página antiga
+            enqueue(q, novaPagina); // Adiciona a nova página à fila
+            break;
+        } else {
+            // Dá uma segunda chance: zera o bit `referenciado` e move para o final
+            
+            pagina_para_substituir->referenciado = 0;
+            dequeue(q); // Remove do início
+            enqueue(q, pagina_para_substituir); // Adiciona ao final
+        }
     }
 }
 
@@ -504,3 +581,54 @@ void print_ram(RAM *ram) {
     }
     printf("\n");
 }
+
+
+
+
+void init_queue(Queue *q, const char *nome) {
+    q->nome = strdup(nome); // Nome para identificar a fila (opcional)
+    q->primeiro = q->ultimo = -1;
+    for (int i = 0; i < NUM_FRAMES_RAM; i++) {
+        q->paginas[i] = NULL;
+    }
+}
+
+
+int is_queue_empty(Queue *q) {
+    return (q->primeiro == -1);
+}
+
+void enqueue(Queue *q, Pagina *pagina) {
+    int pos = (q->ultimo == -1) ? 0 : (q->ultimo + 1) % NUM_FRAMES_RAM;
+    q->paginas[pos] = pagina;
+    q->ultimo = pos;
+
+    if (q->primeiro == -1) {
+        q->primeiro = 0; // Inicializa o início da fila
+    }
+}
+
+Pagina* dequeue(Queue *q) {
+    if (is_queue_empty(q)) {
+        printf("Erro: Fila vazia, não há páginas para remover.\n");
+        return NULL;
+    }
+    Pagina *pagina = q->paginas[q->primeiro];
+    q->paginas[q->primeiro] = NULL;
+
+    if (q->primeiro == q->ultimo) {
+        q->primeiro = q->ultimo = -1; // Reset quando a fila fica vazia
+    } else {
+        q->primeiro = (q->primeiro + 1) % NUM_FRAMES_RAM;
+    }
+
+    return pagina;
+}
+
+Pagina* peek(Queue *q) {
+    if (is_queue_empty(q)) {
+        return NULL;
+    }
+    return q->paginas[q->primeiro];
+}
+
