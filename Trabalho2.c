@@ -278,7 +278,7 @@ void subs_LRU_Aging(RAM *ram, Pagina *novaPagina, int currentProcess, int operac
 
     Pagina *pagina_para_substituir = NULL;
     // Encontra a página com o menor contador
-    for (int i = 0; i < NUM_FRAMES_RAM; i++) {
+    for (int i = 0; i < NUM_FRAMES_TABEL; i++) {
         Pagina *pagina_atual = tabelas[currentProcess].paginas[i];
         if (pagina_atual->valido == 1) {
             if (menor_valor == -1 ||pagina_atual->contador < menor_valor) {
@@ -451,7 +451,6 @@ void inicializar_tabela(TabelaPaginacao *tabela, int processo) {
         tabela->paginas[i]->processo = processo; // Para indicar que nenhuma página pertence a um processo ainda
         tabela->paginas[i]->tabelaIndex = i;
         tabela->paginas[i]->contador = 0;
-
     }
 }
 
