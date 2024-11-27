@@ -9,7 +9,6 @@
 #include <time.h>
 #include <string.h>
 #include <pthread.h>
-//Revisar includes
 
 #define NUM_PROCESSES 4
 #define NUM_FRAMES_RAM 16
@@ -17,13 +16,15 @@
 
 
 int GLOBAL_NEW_PAGE = -1;
+int GLOBAL_END_SIMULATION = -1;
 
 typedef struct {
-    int valid;
+    int valido;
     int referenciado;
     int modificado;
-    int endereco_virtual_na_ram;
+    int ramIndex;
     int processo;
+    int tabelaIndex;
 } Pagina;
 
 typedef struct {
@@ -34,9 +35,10 @@ typedef struct {
     Pagina* paginas[NUM_FRAMES_RAM];  
 } RAM;
 
-
+void print_tabelas_paginacao(TabelaPaginacao tabelas[]);
 void print_ram(RAM *ram);
-void inicializar_tabela(TabelaPaginacao *tabela);
+void subs_NRU(RAM *ram, TabelaPaginacao *tabelas, int currentProcess, Pagina *novaPagina, int operacao);
+void inicializar_tabela(TabelaPaginacao *tabela, int processo);
 void inicializar_ram(RAM *ram);
 void call_substitution_algorithm(char *n);
 void TodosProcessos(int *shm_P1,int *shm_P2,int *shm_P3,int *shm_P4,int num_rodadas);
@@ -47,21 +49,20 @@ int isPageFault(RAM *vetor, Pagina *elemento);
 int main(int argc, char *argv[]){
     int ProcessPid;
     int num_rodadas_cmd; 
-    int shm_P1;
-    int shm_P2;
-    int shm_P3;
-    int shm_P4;
-    int* nova_pagina_P1;
-    int* nova_pagina_P2;
-    int* nova_pagina_P3;
-    int* nova_pagina_P4;
+    int shm_P1, shm_P2, shm_P3, shm_P4;
+    int *nova_pagina_P1, *nova_pagina_P2,*nova_pagina_P3,*nova_pagina_P4;
     if (argc < 3) {  // Verifica se foi passado pelo menos um argumento além do nome do programa
         printf("Erro: Passe Qual Algoritimo Usar (NRU/ 2nCH/ LRU/ WS) e o Numero de rodadas.\n");
         return 1;
     }
 
-    //char* Algoritimo_cmd = (argv[1]); 
+    char* algoritmo_cmd = (argv[1]); 
     num_rodadas_cmd = atoi((argv[2])); //converte pra numero
+
+    printf("-------------- ALGORITMO DE SUBSTITUICAO: %s --------------\n", algoritmo_cmd);
+    printf("--------------    NUMERO DE RODADAS: %d      --------------\n", num_rodadas_cmd);
+
+
     shm_P1 =  shmget (IPC_PRIVATE, 2*sizeof(int), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);  
     shm_P2 =  shmget (IPC_PRIVATE, 2*sizeof(int), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR); 
     shm_P3 =  shmget (IPC_PRIVATE, 2*sizeof(int), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR); 
@@ -82,6 +83,7 @@ int main(int argc, char *argv[]){
         signal(SIGUSR2, SignalHandler);  
         signal(SIGTERM, SignalHandler);  
         signal(SIGTSTP, SignalHandler); 
+        signal(SIGPWR, SignalHandler); 
         
         
         RAM memoria_ram;
@@ -90,14 +92,13 @@ int main(int argc, char *argv[]){
         inicializar_ram(&memoria_ram);
 
         for (int i = 0; i < NUM_PROCESSES; i++) {
-            inicializar_tabela(&tabelas[i]);
+            inicializar_tabela(&tabelas[i], i+1);
         }
 
         while(1)
         {
             if(GLOBAL_NEW_PAGE != -1)
             {
-                printf("Nova Pagina!\n");
                 int index;
                 int operacao;
                 int currentProcess = GLOBAL_NEW_PAGE - 1; //Pega o index do processo pras tabelas de processos
@@ -120,43 +121,114 @@ int main(int argc, char *argv[]){
                         operacao = nova_pagina_P4[1];
                         break;
                 }
-                printf("Dados da SHM: index %d | op %d | Process %d\n", index,operacao,currentProcess);
-
                 
-                Pagina* currentPage = (Pagina*)malloc(sizeof(Pagina));
-                currentPage = &(tabelas[currentProcess].paginas[index]);
-                printf("informacoes current page: %d %d\n",currentProcess, index);
+                Pagina* currentPage = tabelas[currentProcess].paginas[index];
+                printf("Pagina lida: Index %d Operacao %d Processo %d\n", index, operacao, currentProcess+1);
                 int pagefault = isPageFault(&memoria_ram,currentPage);
-                printf("Pagefault index: %d\n", pagefault);
-                if(pagefault == -2)
+                if(pagefault == -2) // A pagina ja esta na RAM
                 {
-                    printf("Faz nada\n");
+                    if(strcmp(algoritmo_cmd,"NRU") == 0)
+                    {
+                        currentPage->modificado = operacao;
+                        currentPage->referenciado = 1;
+                    }
                 }
-                else if(pagefault == -1)
+                else if(pagefault == -1) // Pagina nao se encontra na RAM, tem q substituir
                 {
-                    printf("Faz Algoritmo\n");
+                    if(strcmp(algoritmo_cmd,"NRU") == 0)
+                    {
+                        subs_NRU(&memoria_ram,tabelas,currentProcess,currentPage,operacao);
+                    }
                 }
-                else
+                else //Existe espaco vazio na RAM para alocar a Pagina
                 {
                     memoria_ram.paginas[pagefault] = currentPage;
-                    currentPage->endereco_virtual_na_ram = pagefault;
-                    currentPage->presente = 1;
-                    currentPage->myProcess = currentProcess;
-                    print_ram (&memoria_ram);
+                    currentPage->ramIndex = pagefault;
+                    currentPage->valido = 1;
+                    currentPage->processo = currentProcess;
+
+                    if(strcmp(algoritmo_cmd,"NRU") == 0)
+                    {
+                        currentPage->modificado = operacao;
+                        currentPage->referenciado = 1;
+                    }
                 }   
                 GLOBAL_NEW_PAGE = -1;
                 kill(ProcessPid, SIGCONT);
             }
+
+            if(GLOBAL_END_SIMULATION != -1)
+                break;
         }
+
+        print_tabelas_paginacao(tabelas);
+        //free, shmdt e shmctl
     }
 
     return 0;
 }
 
 
-void subs_NRU(RAM* ram,TabelaPaginacao tabelas,int currentProcess,Pagina* novaPagina)
+void subs_NRU(RAM *ram, TabelaPaginacao *tabelas, int currentProcess, Pagina *novaPagina, int operacao) 
 {
+    Pagina *categorias[4][NUM_FRAMES_TABEL];
+    int contadores[4] = {0, 0, 0, 0}; // Contadores para cada categoria
 
+    // Percorre a tabela de paginação do processo atual
+    for (int i = 0; i < NUM_FRAMES_TABEL; i++) {
+        Pagina *pagina = tabelas[currentProcess].paginas[i];
+
+        if (pagina != NULL && pagina->valido == 1) {
+            // Classifica a página em uma das quatro categorias
+            if (pagina->referenciado == 0 && pagina->modificado == 0) {
+                categorias[0][contadores[0]++] = pagina; // Classe 0: Não referenciada, não modificada
+            } else if (pagina->referenciado == 0 && pagina->modificado == 1) {
+                categorias[1][contadores[1]++] = pagina; // Classe 1: Não referenciada, modificada
+            } else if (pagina->referenciado == 1 && pagina->modificado == 0) {
+                categorias[2][contadores[2]++] = pagina; // Classe 2: Referenciada, não modificada
+            } else if (pagina->referenciado == 1 && pagina->modificado == 1) {
+                categorias[3][contadores[3]++] = pagina; // Classe 3: Referenciada, modificada
+            }
+        }
+    }
+
+    Pagina *pagina_para_substituir = NULL;
+    for (int classe = 0; classe < 4; classe++) {
+        if (contadores[classe] > 0) {
+            pagina_para_substituir = categorias[classe][0]; 
+            break;
+        }
+    }
+
+    if (pagina_para_substituir != NULL) { //Substituicao
+        int frame = pagina_para_substituir->ramIndex;
+
+        // Se a página modificada está sendo substituída, escreve no disco (simulado)
+        if (pagina_para_substituir->modificado == 1) {
+            printf("Página suja substituída. Gravando no swap: Página %d do processo %d\n",
+                   pagina_para_substituir->tabelaIndex, 
+                   pagina_para_substituir->processo + 1);
+        }
+
+        // Atualiza a tabela de paginação da página substituída 
+        pagina_para_substituir->valido = 0;
+        pagina_para_substituir->ramIndex = -1;
+        pagina_para_substituir->referenciado = 0;
+        pagina_para_substituir->modificado = 0;
+
+        // Atualiza a RAM com a nova página
+        ram->paginas[frame] = novaPagina;
+        novaPagina->valido = 1;
+        novaPagina->ramIndex = frame;
+        novaPagina->referenciado = 1;
+        novaPagina->modificado = operacao;  
+        novaPagina->processo = currentProcess;
+
+        printf("Página substituída. Nova página %d alocada no quadro %d para o processo %d\n",
+               novaPagina->tabelaIndex, frame, currentProcess+1);
+    } else {
+        printf("Erro: Não há páginas válidas para substituir no processo %d\n", currentProcess+1);
+    }
 }
 
 
@@ -169,7 +241,6 @@ void TodosProcessos(int *shm_P1,int *shm_P2,int *shm_P3,int *shm_P4,int num_roda
     char linha[100];
     int numero;
     char operacao;
-
     // Abrindo os 4 arquivos
     for (int i = 0; i < 4; i++) {
         arquivos[i] = fopen(nomes_arquivos[i], "r");
@@ -188,32 +259,27 @@ void TodosProcessos(int *shm_P1,int *shm_P2,int *shm_P3,int *shm_P4,int num_roda
             if (fgets(linha, sizeof(linha), arquivos[i]) != NULL) {
                 // Extrai o número e a operação (R ou W) da linha
                 sscanf(linha, "%d %c", &numero, &operacao);
-
                 switch (i)
                 {
                     case 0:
-                        printf("Case 0\n");
                         shm_P1[0] = numero;
                         shm_P1[1] = (operacao == 'R') ? 0 : 1;
                         kill(getppid(), SIGUSR1);
                         raise(SIGSTOP);
                         break;
                     case 1:
-                        printf("Case 1\n");
                         shm_P2[0] = numero;
                         shm_P2[1] = (operacao == 'R') ? 0 : 1;
                         kill(getppid(), SIGUSR2);
                         raise(SIGSTOP); 
                         break;
                     case 2:
-                        printf("Case 2\n");
                         shm_P3[0] = numero;
                         shm_P3[1] = (operacao == 'R') ? 0 : 1;
                         kill(getppid(), SIGTERM);
                         raise(SIGSTOP);
                         break;
-                    case 4:
-                        printf("Case 3\n");
+                    case 3:
                         shm_P4[0] = numero;
                         shm_P4[1] = (operacao == 'R') ? 0 : 1;
                         kill(getppid(), SIGTSTP);                 
@@ -229,18 +295,19 @@ void TodosProcessos(int *shm_P1,int *shm_P2,int *shm_P3,int *shm_P4,int num_roda
         }
 
         cont++; // Incrementa o contador de rodadas
-        printf("Rodada %d completa\n", cont);
     }
+    shmdt(shm_P1);
+    shmdt(shm_P2);
+    shmdt(shm_P3);
+    shmdt(shm_P4);
+
 
     // Fecha os arquivos
     for (int i = 0; i < 4; i++) {
         fclose(arquivos[i]);
     }
+    kill(getppid(),SIGPWR);
 }
-
-
-
-#pragma region 
 
 int isPageFault(RAM *vetor, Pagina *elemento) {
     for (int i = 0; i < NUM_FRAMES_RAM; i++) {
@@ -270,17 +337,31 @@ void SignalHandler(int n)
         case SIGTSTP:
             GLOBAL_NEW_PAGE = 4;
             break;
+        case SIGPWR:
+            GLOBAL_END_SIMULATION = 1;
+            break;
     }
 }
 
-void inicializar_tabela(TabelaPaginacao *tabela) {
+void inicializar_tabela(TabelaPaginacao *tabela, int processo) {
     for (int i = 0; i < NUM_FRAMES_TABEL; i++) {
-        tabela->paginas[i]->valid = -1;
-        tabela->paginas[i]->modificado = -1;
-        tabela->paginas[i]->referenciado = -1;
-        tabela->paginas[i]->endereco_virtual_na_ram = -1;
+        // Aloca memória para cada página antes de inicializar
+        tabela->paginas[i] = (Pagina *)malloc(sizeof(Pagina));
+        if (tabela->paginas[i] == NULL) {
+            perror("Erro ao alocar memória para página");
+            exit(1);
+        }
+
+        // Inicializa os campos da página
+        tabela->paginas[i]->valido = 0;
+        tabela->paginas[i]->modificado = 0;
+        tabela->paginas[i]->referenciado = 0;
+        tabela->paginas[i]->ramIndex = -1;
+        tabela->paginas[i]->processo = processo; // Para indicar que nenhuma página pertence a um processo ainda
+        tabela->paginas[i]->tabelaIndex = i;
     }
 }
+
 
 void inicializar_ram(RAM *ram) {
     for (int i = 0; i < NUM_FRAMES_RAM; i++) {
@@ -288,6 +369,29 @@ void inicializar_ram(RAM *ram) {
     }
 }
 
+void print_tabelas_paginacao(TabelaPaginacao tabelas[]) {
+    for (int processo = 0; processo < NUM_PROCESSES; processo++) {
+        printf("Tabela de Paginação do Processo P%d:\n", processo + 1);
+        printf("Página | valido | Referenciado | Modificado | Índice RAM\n");
+        printf("--------------------------------------------------------\n");
+
+        for (int i = 0; i < NUM_FRAMES_TABEL; i++) {
+            Pagina *pagina = tabelas[processo].paginas[i];
+            if (pagina != NULL) {
+                printf("%6d |   %3d  |      %3d     |     %3d     |    %5d\n", 
+                       i, 
+                       pagina->valido, 
+                       pagina->referenciado, 
+                       pagina->modificado, 
+                       pagina->ramIndex);
+            } else {
+                printf("%6d |   ---  |      ---     |     ---     |    ---\n", i);
+            }
+        }
+
+        printf("\n");
+    }
+}
 
 
 void print_ram(RAM *ram) {
@@ -301,11 +405,10 @@ void print_ram(RAM *ram) {
             Pagina *pagina = ram->paginas[i];
             printf("%7d |     %d     |     %d       |        %d\n", 
                    i, 
-                   pagina->presente, 
+                   pagina->valido, 
                    pagina->modificado, 
-                   pagina->myProcess);
+                   pagina->processo);
         }
     }
     printf("\n");
 }
-#pragma endregion
