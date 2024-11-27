@@ -44,6 +44,7 @@ void call_substitution_algorithm(char *n);
 void TodosProcessos(int *shm_P1,int *shm_P2,int *shm_P3,int *shm_P4,int num_rodadas);
 void SignalHandler(int n);
 int isPageFault(RAM *vetor, Pagina *elemento);
+void reset_referenciado(TabelaPaginacao *tabela);
 
 
 int main(int argc, char *argv[]){
@@ -200,6 +201,8 @@ void subs_NRU(RAM *ram, TabelaPaginacao *tabelas, int currentProcess, Pagina *no
         }
     }
 
+    reset_referenciado(&tabelas[currentProcess]); //Reinicia as tabelas referencered
+
     if (pagina_para_substituir != NULL) { //Substituicao
         int frame = pagina_para_substituir->ramIndex;
 
@@ -209,6 +212,7 @@ void subs_NRU(RAM *ram, TabelaPaginacao *tabelas, int currentProcess, Pagina *no
                    pagina_para_substituir->tabelaIndex, 
                    pagina_para_substituir->processo + 1);
         }
+
 
         // Atualiza a tabela de paginação da página substituída 
         pagina_para_substituir->valido = 0;
@@ -230,9 +234,6 @@ void subs_NRU(RAM *ram, TabelaPaginacao *tabelas, int currentProcess, Pagina *no
         printf("Erro: Não há páginas válidas para substituir no processo %d\n", currentProcess+1);
     }
 }
-
-
-
 
 
 void TodosProcessos(int *shm_P1,int *shm_P2,int *shm_P3,int *shm_P4,int num_rodadas){
@@ -308,6 +309,17 @@ void TodosProcessos(int *shm_P1,int *shm_P2,int *shm_P3,int *shm_P4,int num_roda
     }
     kill(getppid(),SIGPWR);
 }
+
+
+void reset_referenciado(TabelaPaginacao *tabela) {
+    for (int i = 0; i < NUM_FRAMES_TABEL; i++) {
+        Pagina *pagina = tabela->paginas[i];
+        if (pagina != NULL && pagina->valido == 1) {
+            pagina->referenciado = 0;
+        }
+    }
+}
+
 
 int isPageFault(RAM *vetor, Pagina *elemento) {
     for (int i = 0; i < NUM_FRAMES_RAM; i++) {
