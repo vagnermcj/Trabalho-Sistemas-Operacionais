@@ -25,7 +25,9 @@ typedef struct {
     int ramIndex;
     int processo;
     int tabelaIndex;
+    unsigned int contador; // Campo para o Aging
 } Pagina;
+
 
 typedef struct {
     Pagina* paginas[NUM_FRAMES_TABEL];  
@@ -44,6 +46,8 @@ void call_substitution_algorithm(char *n);
 void TodosProcessos(int *shm_P1,int *shm_P2,int *shm_P3,int *shm_P4,int num_rodadas);
 void SignalHandler(int n);
 int isPageFault(RAM *vetor, Pagina *elemento);
+void subs_LRU_Aging(RAM *ram, Pagina *novaPagina, int currentProcess, int operacao,TabelaPaginacao * tabelas);
+void atualizar_contadores(RAM *ram);
 void reset_referenciado(TabelaPaginacao *tabela);
 
 
@@ -124,11 +128,11 @@ int main(int argc, char *argv[]){
                 }
                 
                 Pagina* currentPage = tabelas[currentProcess].paginas[index];
-                printf("Pagina lida: Index %d Operacao %d Processo %d\n", index, operacao, currentProcess+1);
+                printf("Pagina lida: Index %d Operacao %d Processo %d\n\n", index, operacao, currentProcess+1);
                 int pagefault = isPageFault(&memoria_ram,currentPage);
                 if(pagefault == -2) // A pagina ja esta na RAM
                 {
-                    if(strcmp(algoritmo_cmd,"NRU") == 0)
+                    if(strcmp(algoritmo_cmd,"NRU") == 0 || strcmp(algoritmo_cmd,"LRU"))
                     {
                         currentPage->modificado = operacao;
                         currentPage->referenciado = 1;
@@ -140,6 +144,18 @@ int main(int argc, char *argv[]){
                     {
                         subs_NRU(&memoria_ram,tabelas,currentProcess,currentPage,operacao);
                     }
+                    else if(strcmp(algoritmo_cmd, "LRU") == 0)
+                    {
+                        subs_LRU_Aging(&memoria_ram, currentPage, currentProcess, operacao,tabelas);
+                    }
+                    else if(strcmp(algoritmo_cmd, "2nCH") == 0)
+                    {
+
+                    }
+                    else if(strcmp(algoritmo_cmd, "WS") == 0)
+                    {
+
+                    }
                 }
                 else //Existe espaco vazio na RAM para alocar a Pagina
                 {
@@ -148,18 +164,20 @@ int main(int argc, char *argv[]){
                     currentPage->valido = 1;
                     currentPage->processo = currentProcess;
 
-                    if(strcmp(algoritmo_cmd,"NRU") == 0)
+                    if(strcmp(algoritmo_cmd,"NRU") == 0 || strcmp(algoritmo_cmd,"LRU"))
                     {
                         currentPage->modificado = operacao;
                         currentPage->referenciado = 1;
                     }
                 }   
                 GLOBAL_NEW_PAGE = -1;
+                if(strcmp(algoritmo_cmd, "LRU") == 0) atualizar_contadores(&memoria_ram);
                 kill(ProcessPid, SIGCONT);
             }
-
+          
             if(GLOBAL_END_SIMULATION != -1)
                 break;
+            
         }
 
         print_tabelas_paginacao(tabelas);
@@ -169,6 +187,22 @@ int main(int argc, char *argv[]){
     return 0;
 }
 
+void atualizar_contadores(RAM *ram) {
+    for (int i = 0; i < NUM_FRAMES_RAM; i++) {
+        if (ram->paginas[i] != NULL) {
+            // Desloca o contador para a direita
+            ram->paginas[i]->contador >>= 1;
+
+            // Se a página foi referenciada, define o bit mais significativo
+            if (ram->paginas[i]->referenciado) {
+                ram->paginas[i]->contador |= 0x80000000; // Define o MSB
+            }
+
+            // Reseta o bit de referência
+            ram->paginas[i]->referenciado = 0;
+        }
+    }
+}
 
 void subs_NRU(RAM *ram, TabelaPaginacao *tabelas, int currentProcess, Pagina *novaPagina, int operacao) 
 {
@@ -200,19 +234,17 @@ void subs_NRU(RAM *ram, TabelaPaginacao *tabelas, int currentProcess, Pagina *no
             break;
         }
     }
-
-    reset_referenciado(&tabelas[currentProcess]); //Reinicia as tabelas referencered
+     reset_referenciado(&tabelas[currentProcess]); //Reinicia as tabelas referencered
 
     if (pagina_para_substituir != NULL) { //Substituicao
         int frame = pagina_para_substituir->ramIndex;
 
         // Se a página modificada está sendo substituída, escreve no disco (simulado)
         if (pagina_para_substituir->modificado == 1) {
-            printf("Página suja substituída. Gravando no swap: Página %d do processo %d\n",
+            printf("Página suja substituída. Gravando no swap: Página %d do processo %d\n\n",
                    pagina_para_substituir->tabelaIndex, 
                    pagina_para_substituir->processo + 1);
         }
-
 
         // Atualiza a tabela de paginação da página substituída 
         pagina_para_substituir->valido = 0;
@@ -228,13 +260,65 @@ void subs_NRU(RAM *ram, TabelaPaginacao *tabelas, int currentProcess, Pagina *no
         novaPagina->modificado = operacao;  
         novaPagina->processo = currentProcess;
 
-        printf("Página substituída. Nova página %d alocada no quadro %d para o processo %d\n",
+        printf("Página substituída. Nova página %d alocada no quadro %d para o processo %d\n\n",
                novaPagina->tabelaIndex, frame, currentProcess+1);
     } else {
         printf("Erro: Não há páginas válidas para substituir no processo %d\n", currentProcess+1);
     }
 }
+void subs_LRU_Aging(RAM *ram, Pagina *novaPagina, int currentProcess, int operacao,TabelaPaginacao * tabelas) {
+    int menor_valor = -1; 
+    int frame_para_substituir = -1;
 
+    Pagina *pagina_para_substituir = NULL;
+    // Encontra a página com o menor contador
+    for (int i = 0; i < NUM_FRAMES_RAM; i++) {
+        Pagina *pagina_atual = tabelas[currentProcess].paginas[i];
+        if (pagina_atual->valido == 1) {
+            if (menor_valor == -1 ||pagina_atual->contador < menor_valor) {
+                menor_valor = pagina_atual->contador;
+                frame_para_substituir = i;
+                pagina_para_substituir = pagina_atual;
+            }
+        }
+    }
+
+    // Substituir a página encontrada
+    if (frame_para_substituir != -1) {
+
+        // Simula gravação em disco se a página foi modificada
+        if (pagina_para_substituir->modificado) {
+            printf("Página %d do processo %d modificada. Salvando no disco...\n",
+                   pagina_para_substituir->tabelaIndex, pagina_para_substituir->processo + 1);
+        }
+
+        // Remove a página antiga
+        pagina_para_substituir->valido = 0;
+        pagina_para_substituir->ramIndex = -1;
+        pagina_para_substituir->referenciado = 0;
+        pagina_para_substituir->modificado = 0;
+
+        // Insere a nova página
+        ram->paginas[frame_para_substituir] = novaPagina;
+        novaPagina->valido = 1;
+        novaPagina->ramIndex = frame_para_substituir;
+        novaPagina->referenciado = 1;
+        novaPagina->modificado = operacao;
+        novaPagina->contador = 0x80000000; // Reseta o contador (mais alta prioridade)
+
+        printf("Página %d alocada no quadro %d para o processo %d\n",
+               novaPagina->tabelaIndex, frame_para_substituir, currentProcess + 1);
+    }
+}
+
+void reset_referenciado(TabelaPaginacao *tabela) {
+    for (int i = 0; i < NUM_FRAMES_TABEL; i++) {
+        Pagina *pagina = tabela->paginas[i];
+        if (pagina != NULL && pagina->valido == 1) {
+            pagina->referenciado = 0;
+        }
+    }
+}
 
 void TodosProcessos(int *shm_P1,int *shm_P2,int *shm_P3,int *shm_P4,int num_rodadas){
     FILE *arquivos[4];
@@ -310,17 +394,6 @@ void TodosProcessos(int *shm_P1,int *shm_P2,int *shm_P3,int *shm_P4,int num_roda
     kill(getppid(),SIGPWR);
 }
 
-
-void reset_referenciado(TabelaPaginacao *tabela) {
-    for (int i = 0; i < NUM_FRAMES_TABEL; i++) {
-        Pagina *pagina = tabela->paginas[i];
-        if (pagina != NULL && pagina->valido == 1) {
-            pagina->referenciado = 0;
-        }
-    }
-}
-
-
 int isPageFault(RAM *vetor, Pagina *elemento) {
     for (int i = 0; i < NUM_FRAMES_RAM; i++) {
         if (vetor->paginas[i] == elemento) {
@@ -333,8 +406,7 @@ int isPageFault(RAM *vetor, Pagina *elemento) {
     return -1;
 }
 
-void SignalHandler(int n)
-{
+void SignalHandler(int n){
     switch (n)
     {
         case SIGUSR1:
@@ -371,6 +443,8 @@ void inicializar_tabela(TabelaPaginacao *tabela, int processo) {
         tabela->paginas[i]->ramIndex = -1;
         tabela->paginas[i]->processo = processo; // Para indicar que nenhuma página pertence a um processo ainda
         tabela->paginas[i]->tabelaIndex = i;
+        tabela->paginas[i]->contador = 0;
+
     }
 }
 
@@ -383,7 +457,7 @@ void inicializar_ram(RAM *ram) {
 
 void print_tabelas_paginacao(TabelaPaginacao tabelas[]) {
     for (int processo = 0; processo < NUM_PROCESSES; processo++) {
-        printf("Tabela de Paginação do Processo P%d:\n", processo + 1);
+        printf("Tabela de Paginação do Processo P%d:\n\n", processo + 1);
         printf("Página | valido | Referenciado | Modificado | Índice RAM\n");
         printf("--------------------------------------------------------\n");
 
