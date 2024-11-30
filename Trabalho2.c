@@ -13,6 +13,7 @@
 #define NUM_PROCESSES 4
 #define NUM_FRAMES_RAM 16
 #define NUM_FRAMES_TABEL 32
+#define DEBUG_MODE 0
 
 
 int GLOBAL_NEW_PAGE = -1;
@@ -50,12 +51,13 @@ typedef struct {
     Pagina* frames[NUM_FRAMES_RAM];  
 } RAM;
 
+void imprimir_working_set(WorkingSet *ws);
 Pagina* obter_ultima_pagina(WorkingSet *ws);
-void inserir_working_set(WorkingSet *ws, Pagina *pagina);
-Pagina* remover_pagina_working_set(WorkingSet *ws, Pagina *pagina_alvo);
+void inserir_working_set(WorkingSet **ws, Pagina *pagina);
+Pagina* remover_pagina_working_set(WorkingSet **ws, Pagina *pagina_alvo);
 int contar_elementos_working_set(WorkingSet *ws);
 int contar_ocorrencias_pagina(WorkingSet *ws, Pagina *pagina);
-void liberar_working_set(WorkingSet *ws);
+void liberar_working_set(WorkingSet **ws);
 void print_tabelas_paginacao(TabelaPaginacao tabelas[]);
 void print_ram(RAM *ram);
 void subs_NRU(RAM *ram, TabelaPaginacao *tabelas, int currentProcess, Pagina *novaPagina, int operacao);
@@ -113,7 +115,7 @@ int main(int argc, char *argv[]){
     filas[3] = fila_P4;
 
     if (argc < 3) {  // Verifica se foi passado pelo menos um argumento além do nome do programa
-        printf("Erro: Passe Qual Algoritimo Usar (NRU/ 2nCH/ LRU/ WS) e o Numero de rodadas.\n");
+        printf("Erro: Passe Qual Algoritimo Usar (NRU/ 2nCH/ LRU/ WS) e o Numero de rodadas(Garanta que o numero de rodadas seja menor que o numero de linhas dos arquivos).\n");
         return 1;
     }
 
@@ -129,8 +131,7 @@ int main(int argc, char *argv[]){
         WS_P4 = NULL;
     }
 
-    printf("-------------- ALGORITMO DE SUBSTITUICAO: %s --------------\n", algoritmo_cmd);
-    printf("--------------    NUMERO DE RODADAS: %d      --------------\n", num_rodadas_cmd);
+   
 
 
     shm_P1 =  shmget (IPC_PRIVATE, 2*sizeof(int), IPC_CREAT | IPC_EXCL | S_IRUSR | S_IWUSR);  
@@ -169,6 +170,7 @@ int main(int argc, char *argv[]){
         {
             if(GLOBAL_NEW_PAGE != -1)
             {
+                printf("===============================================\n");
                 int index;
                 int operacao;
                 int currentProcess = GLOBAL_NEW_PAGE - 1; //Pega o index do processo pras tabelas de processos
@@ -193,10 +195,15 @@ int main(int argc, char *argv[]){
                 }
                 
                 Pagina* currentPage = tabelas[currentProcess].paginas[index];
-                printf("Pagina lida: Index %d Operacao %d Processo %d\n\n", index, operacao, currentProcess+1);
+                if(DEBUG_MODE)
+                    printf("Pagina lida: Index %d Operacao %d Processo %d\n\n", index, operacao, currentProcess+1);
+                    
                 int pagefault = isPageFault(&memoria_ram,currentPage);
                 if(pagefault == -2) // A pagina ja esta na RAM
                 {
+                    if(strcmp(algoritmo_cmd,"2nCH") != 0)
+                        reset_referenciado(&tabelas[currentProcess]);
+                    
                     currentPage->modificado = operacao;
                     currentPage->referenciado = 1;
 
@@ -205,26 +212,27 @@ int main(int argc, char *argv[]){
                         int contagem = 0;
 
                         if(contar_elementos_working_set(WS[currentProcess]) < k)
-                            {   
-                                inserir_working_set(WS[currentProcess], currentPage);
+                        {   
+                            inserir_working_set(&WS[currentProcess], currentPage);
+                        }
+                        else
+                        {
+                            contagem = contar_ocorrencias_pagina(WS[currentProcess], currentPage);
+                            if(contagem > 0)
+                            {
+                                for (int i = 0; i < contagem; i++)
+                                {
+                                    remover_pagina_working_set(&WS[currentProcess], currentPage);
+                                }
+                                inserir_working_set(&WS[currentProcess], currentPage);
                             }
                             else
                             {
-                                contagem = contar_ocorrencias_pagina(WS[currentProcess], currentPage);
-                                if(contagem > 0)
-                                {
-                                    for (int i = 0; i < contagem; i++)
-                                    {
-                                        remover_pagina_working_set(WS[currentProcess], currentPage);
-                                    }
-                                    inserir_working_set(WS[currentProcess], currentPage);
-                                }
-                                else
-                                {
-                                    remover_pagina_working_set(WS[currentProcess], obter_ultima_pagina(WS[currentProcess]));
-                                    inserir_working_set(WS[currentProcess],currentPage);
-                                }
+                                remover_pagina_working_set(&WS[currentProcess], obter_ultima_pagina(WS[currentProcess]));
+                                inserir_working_set(&WS[currentProcess],currentPage);
                             }
+                        }
+                        imprimir_working_set(WS[currentProcess]);
                     }
                 }
                 else if(pagefault == -1) // a ram ta cheia e ele nao está la, tem q substituir
@@ -253,6 +261,9 @@ int main(int argc, char *argv[]){
                 {
                     total_pagefaults++;
 
+                    if(strcmp(algoritmo_cmd, "2nCh") != 0)
+                        reset_referenciado(&tabelas[currentProcess]);
+                    
                     memoria_ram.frames[pagefault] = currentPage;
                     currentPage->ramIndex = pagefault;
                     currentPage->valido = 1;
@@ -261,66 +272,23 @@ int main(int argc, char *argv[]){
                     currentPage->referenciado = 1;
 
                     if(strcmp(algoritmo_cmd,"WS") == 0)
-                    {
-                        switch (currentProcess)
+                    {  
+
+                        if(contar_elementos_working_set(WS[currentProcess]) < k)
                         {
-                            case 0:
-                                if(contar_elementos_working_set(WS_P1) < k)
-                                {
-                                    inserir_working_set(WS_P1,currentPage);
-                                }
-                                else
-                                {
-                                    while(contar_elementos_working_set(WS_P1) > k)
-                                    {
-                                        remover_pagina_working_set(WS_P1, obter_ultima_pagina(WS_P1));
-                                    }
-                                    inserir_working_set(WS_P1,currentPage);
-                                }
-                                break;
-                            case 1:
-                                if(contar_elementos_working_set(WS_P2) < k)
-                                {
-                                    inserir_working_set(WS_P2,currentPage);
-                                }
-                                else
-                                {
-                                    while(contar_elementos_working_set(WS_P2) > k)
-                                    {
-                                        remover_pagina_working_set(WS_P2, obter_ultima_pagina(WS_P2));
-                                    }
-                                    inserir_working_set(WS_P2,currentPage);
-                                }
-                                break;
-                            case 2:
-                                if(contar_elementos_working_set(WS_P3) < k)
-                                {
-                                    inserir_working_set(WS_P3,currentPage);
-                                }
-                                else
-                                {
-                                    while(contar_elementos_working_set(WS_P3) > k)
-                                    {
-                                        remover_pagina_working_set(WS_P3, obter_ultima_pagina(WS_P3));
-                                    }
-                                    inserir_working_set(WS_P3,currentPage);
-                                }
-                                break;
-                            case 3:
-                                if(contar_elementos_working_set(WS_P4) < k)
-                                {
-                                    inserir_working_set(WS_P4,currentPage);
-                                }
-                                else
-                                {
-                                    while(contar_elementos_working_set(WS_P4) > k)
-                                    {
-                                        remover_pagina_working_set(WS_P4, obter_ultima_pagina(WS_P4));
-                                    }
-                                    inserir_working_set(WS_P4,currentPage);
-                                }
-                                break;
+                            if(DEBUG_MODE) printf("Quantidade de elementos WS antes de inserir: %d\n", contar_elementos_working_set(WS[currentProcess]));
+                            inserir_working_set(&WS[currentProcess],currentPage);
+                        }
+                        else
+                        {
+                            
+                            while(contar_elementos_working_set(WS[currentProcess]) >= k)
+                            {
+                                remover_pagina_working_set(&WS[currentProcess], obter_ultima_pagina(WS[currentProcess]));
                             }
+                            inserir_working_set(&WS[currentProcess],currentPage);
+                        }
+                        imprimir_working_set(WS[currentProcess]);
                     }
 
                     if(strcmp(algoritmo_cmd,"2nCH") == 0)
@@ -339,8 +307,11 @@ int main(int argc, char *argv[]){
         }
 
         print_tabelas_paginacao(tabelas);
-        printf("================ PAGEFAULTS: %d ================\n", total_pagefaults);
-        //free, shmdt e shmctl
+        printf("-------------- ALGORITMO DE SUBSTITUICAO: %s --------------\n", algoritmo_cmd);
+        printf("--------------         NUMERO DE RODADAS: %d --------------\n", num_rodadas_cmd);
+        printf("--------------                PAGEFAULTS: %d --------------n", total_pagefaults);
+        if(strcmp(algoritmo_cmd, "WS") == 0)
+            printf("Tamanho k do working set: %d", k);
     }
 
     return 0;
@@ -389,11 +360,12 @@ void subs_NRU(RAM *ram, TabelaPaginacao *tabelas, int currentProcess, Pagina *no
     Pagina *pagina_para_substituir = NULL;
     for (int classe = 0; classe < 4; classe++) {
         if (contadores[classe] > 0) {
+            if(DEBUG_MODE) printf("Contadores: %d %d %d %d\n", contadores[0],contadores[1],contadores[2],contadores[3]);
             pagina_para_substituir = categorias[classe][0]; 
             break;
         }
     }
-     reset_referenciado(&tabelas[currentProcess]); //Reinicia as tabelas referencered
+    reset_referenciado(&tabelas[currentProcess]); //Reinicia as tabelas referencered
 
     if (pagina_para_substituir != NULL) { //Substituicao
         int frame = pagina_para_substituir->ramIndex;
@@ -419,8 +391,8 @@ void subs_NRU(RAM *ram, TabelaPaginacao *tabelas, int currentProcess, Pagina *no
         novaPagina->modificado = operacao;  
         novaPagina->processo = currentProcess;
 
-        printf("Página substituída. Nova página %d alocada no quadro %d para o processo %d\n\n",
-               novaPagina->tabelaIndex, frame, currentProcess+1);
+        printf("Página substituída. Nova página %d alocada no lugar do %d para o processo %d\n\n",
+               novaPagina->tabelaIndex, pagina_para_substituir->tabelaIndex, currentProcess+1);
     } else {
         printf("Erro: Não há páginas válidas para substituir no processo %d\n", currentProcess+1);
     }
@@ -464,10 +436,10 @@ void subs_LRU_Aging(RAM *ram, Pagina *novaPagina, int currentProcess, int operac
         novaPagina->ramIndex = frame_para_substituir;
         novaPagina->referenciado = 1;
         novaPagina->modificado = operacao;
-        novaPagina->contador = 0x80000000; // Reseta o contador (mais alta prioridade)
+        novaPagina->contador = 0x00000000; // Reseta o contador (mais alta prioridade)
 
-        printf("Página %d alocada no quadro %d para o processo %d\n",
-               novaPagina->tabelaIndex, frame_para_substituir, currentProcess + 1);
+        printf("Página %d alocada no lugar do %d para o processo %d\n",
+               novaPagina->tabelaIndex, pagina_para_substituir->tabelaIndex, currentProcess + 1);
     }
 }
 
@@ -508,12 +480,18 @@ void subs_2nd_chance(Queue *q, RAM *ram, Pagina *novaPagina, int operacao) {
 void subs_WS(RAM *ram, int currentProcess, int operacao, Pagina* novaPagina, WorkingSet *ws){
     Pagina* pagina_para_substituir = obter_ultima_pagina(ws);
     
+    if(DEBUG_MODE)
+    {
+        printf("Inicio da substituicao: \n");
+        imprimir_working_set(ws);
+    }
+
     if(pagina_para_substituir != NULL)
     {
         int frame = pagina_para_substituir->ramIndex;
 
-        remover_pagina_working_set(ws, pagina_para_substituir);
-        inserir_working_set(ws, novaPagina);
+        remover_pagina_working_set(&ws, pagina_para_substituir);
+        inserir_working_set(&ws, novaPagina);
 
         // Atualiza a tabela de paginação da página substituída 
         pagina_para_substituir->valido = 0;
@@ -529,10 +507,13 @@ void subs_WS(RAM *ram, int currentProcess, int operacao, Pagina* novaPagina, Wor
         novaPagina->modificado = operacao;
         novaPagina->processo = currentProcess;
     }
+
+    if(DEBUG_MODE)
+    {
+        printf("Fim da substituicao: \n");
+        imprimir_working_set(ws);
+    }
 }
-
-
-
 
 void reset_referenciado(TabelaPaginacao *tabela) {
     for (int i = 0; i < NUM_FRAMES_TABEL; i++) {
@@ -794,9 +775,8 @@ Pagina* obter_ultima_pagina(WorkingSet *ws) {
 }
 
 
-
-void inserir_working_set(WorkingSet *ws, Pagina *pagina) {
-    int ocorrencias = contar_ocorrencias_pagina(ws, pagina);
+void inserir_working_set(WorkingSet **ws, Pagina *pagina) {
+    int ocorrencias = contar_ocorrencias_pagina(*ws, pagina);
     if(ocorrencias > 0)
     {
         for (int i = 0; i < ocorrencias; i++)
@@ -813,18 +793,18 @@ void inserir_working_set(WorkingSet *ws, Pagina *pagina) {
             exit(1);
         }
         novo->pagina = pagina;
-        novo->proximo = ws;
-        ws = novo; // Atualiza a cabeça da lista
+        novo->proximo = *ws;
+        *ws = novo; // Atualiza a cabeça da lista
     }
 }
 
-Pagina* remover_pagina_working_set(WorkingSet *ws, Pagina *pagina_alvo) {
-    if (ws == NULL) {
+Pagina* remover_pagina_working_set(WorkingSet **ws, Pagina *pagina_alvo) {
+    if (*ws == NULL) {
         printf("Erro: A lista está vazia, nada para remover.\n");
         return NULL;
     }
 
-    WorkingSet *atual = ws;
+    WorkingSet *atual = *ws;
     WorkingSet *anterior = NULL;
 
     // Percorre a lista para encontrar a página
@@ -832,7 +812,7 @@ Pagina* remover_pagina_working_set(WorkingSet *ws, Pagina *pagina_alvo) {
         if (atual->pagina == pagina_alvo) { // Página encontrada
             if (anterior == NULL) {
                 // A página está na cabeça da lista
-                ws = atual->proximo;
+                *ws = atual->proximo;
             } else {
                 // A página está no meio ou no final
                 anterior->proximo = atual->proximo;
@@ -851,6 +831,7 @@ Pagina* remover_pagina_working_set(WorkingSet *ws, Pagina *pagina_alvo) {
     printf("Página não encontrada no Working Set.\n");
     return NULL; // Página não encontrada
 }
+
 
 
 int contar_elementos_working_set(WorkingSet *ws) {
@@ -873,12 +854,26 @@ int contar_ocorrencias_pagina(WorkingSet *ws, Pagina *pagina) {
     return contador;
 }
 
-void liberar_working_set(WorkingSet *ws) {
-    while (ws != NULL) {
-        WorkingSet *removido = ws;
-        ws = (ws)->proximo;
+void liberar_working_set(WorkingSet **ws) {
+    while (*ws != NULL) {
+        WorkingSet *removido = *ws;
+        *ws = (*ws)->proximo;
         free(removido);
     }
 }
 
+
+void imprimir_working_set(WorkingSet *ws) {
+    if (ws == NULL) {
+        printf("O Working Set está vazio.\n");
+        return;
+    }
+
+    printf("Páginas no Working Set (tabelaIndex):\n");
+    while (ws != NULL) {
+        printf("%d ", ws->pagina->tabelaIndex);
+        ws = ws->proximo; // Avança para o próximo elemento
+    }
+    printf("\n");
+}
 
