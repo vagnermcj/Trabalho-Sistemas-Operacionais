@@ -311,7 +311,7 @@ int main(int argc, char *argv[]){
         printf("--------------         NUMERO DE RODADAS: %d --------------\n", num_rodadas_cmd);
         printf("--------------                PAGEFAULTS: %d --------------\n", total_pagefaults);
         if(strcmp(algoritmo_cmd, "WS") == 0)
-        printf("Tamanho k do working set: %d", k);
+            printf("Tamanho k do working set: %d", k);
     }
 
     return 0;
