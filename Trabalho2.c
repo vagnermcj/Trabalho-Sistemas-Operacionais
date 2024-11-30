@@ -309,9 +309,9 @@ int main(int argc, char *argv[]){
         print_tabelas_paginacao(tabelas);
         printf("-------------- ALGORITMO DE SUBSTITUICAO: %s --------------\n", algoritmo_cmd);
         printf("--------------         NUMERO DE RODADAS: %d --------------\n", num_rodadas_cmd);
-        printf("--------------                PAGEFAULTS: %d --------------\n", total_pagefaults);
         if(strcmp(algoritmo_cmd, "WS") == 0)
-            printf("Tamanho k do working set: %d", k);
+            printf("--------------             WORKING SET K: %d  --------------\n", k);
+        printf("--------------                PAGEFAULTS: %d --------------\n", total_pagefaults);
     }
 
     return 0;
